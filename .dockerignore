@@ -15,3 +15,6 @@ kaggle/
 # because we mount them dynamically as Docker volumes at runtime.
 media/
 qdrant_db/
+
+# Ignore Documentation
+Docs/

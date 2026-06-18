@@ -18,3 +18,8 @@ kaggle/
 # --- IDE ---
 .vscode/
 .idea/
+
+# --  DOCs   --
+Docs/render_and_push.py
+Docs/render_and_push.ps1
+Docs/
