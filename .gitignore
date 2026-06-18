@@ -1,0 +1,20 @@
+# --- Secrets ---
+.env
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Data / DB ---
+qdrant_db/
+media/
+
+# --- Kaggle workspace mirror ---
+kaggle/
+
+# --- IDE ---
+.vscode/
+.idea/

@@ -1,0 +1,17 @@
+__pycache__/
+.venv/
+venv/
+*.pyc
+.DS_Store
+.env
+.git/
+
+# Exclude test/dev artifacts from the image
+test/
+kaggle/
+*.pdf
+
+# We ignore the media and DB folders during the build phase
+# because we mount them dynamically as Docker volumes at runtime.
+media/
+qdrant_db/
