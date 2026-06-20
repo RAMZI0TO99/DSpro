@@ -12,7 +12,6 @@ import torch
 import open_clip
 from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient, models
-from google.genai import types as genai_types
 
 
 # --- 1. Load Environment Variables from .env ---
@@ -67,7 +66,7 @@ clip_model, _, clip_transform = open_clip.create_model_and_transforms(
     'ViT-B-16-SigLIP', pretrained='webli'
 )
 clip_model = clip_model.to(device).eval()
-clip_tokenizer = open_clip.get_tokenizer('ViT-B-16-SigLIP')
+clip_tokenizer = open_clip.get_tokenizer('ViT-B-16-SigLIP-256')
 
 print("Loading BM25 Lexical Engine...")
 bm25_model = SparseTextEmbedding(model_name="Qdrant/bm25")
@@ -355,8 +354,9 @@ def chat_with_video(request: ChatQuery):
     full_transcript = " ".join([r.payload.get("transcript", "") for r in records])
 
     # --- HARDWARE LIMIT FIX ---
-    # 1 token is roughly 4 characters. We have a 4096 token limit in LM Studio.
-    MAX_CHARS = 60000
+    # 1 token is roughly 4 characters. By limiting to 8000 chars (~2000 tokens), 
+    # we force the GPU to process the prompt in ~6 seconds instead of 65 seconds.
+    MAX_CHARS = 8000
     if len(full_transcript) > MAX_CHARS:
         full_transcript = full_transcript[:MAX_CHARS] + "\n...[TRANSCRIPT TRUNCATED DUE TO GPU MEMORY LIMITS]"
 

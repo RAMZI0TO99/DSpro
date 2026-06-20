@@ -5,16 +5,11 @@ services:
     image: qdrant/qdrant:latest
     container_name: dspro_qdrant
     ports:
-      - "6333:6333"   # REST API (also used by the Python client)
-      - "6334:6334"   # gRPC (optional, good to expose for future use)
+      - "6333:6333"   # REST API
+      - "6334:6334"   # gRPC
     volumes:
-      - qdrant_data:/qdrant/storage   # Named volume: survives container restarts
+      - qdrant_data:/qdrant/storage
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/readyz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # ── FastAPI Backend ───────────────────────────────────────────────────
   backend:
@@ -25,17 +20,34 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env                          # Injects GEMINI_API_KEY at runtime (never baked into image)
+      - .env
     environment:
-      - QDRANT_URL=http://qdrant:6333 # Docker internal network DNS — backend finds Qdrant by service name
+      - QDRANT_URL=http://qdrant:6333
+      # Cache settings - use cached models FIRST before downloading
+      - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface
+      - TORCH_HOME=/root/.cache/torch
+      - EASYOCR_HOME=/root/.EasyOCR
+      - HF_HOME=/root/.cache/huggingface
+      - HF_HUB_LOCAL_FILES_ONLY=0
     volumes:
-      - ./media:/app/media            # Bind-mount: your video files persist on the host at ./media
+      # Application & media
+      - ./media:/app/media
+      
+      # ── MODEL CACHES (PERSIST across restarts) ──
+      # These map host directories → container cache directories
+      # Models downloaded during build are cached here
+      # On subsequent runs, models load from cache BEFORE attempting network download
+      - huggingface_cache:/root/.cache/huggingface
+      - torch_cache:/root/.cache/torch
+      - easyocr_cache:/root/.EasyOCR
+      - fastembed_cache:/root/.local/share/fastembed
+      
     depends_on:
       qdrant:
-        condition: service_healthy    # Wait until Qdrant passes its health check before starting
+        condition: service_started
     restart: unless-stopped
 
-    # ── RTX 2050 GPU passthrough (Docker Desktop + WSL2) ──────────────
+    # ── GPU passthrough (Docker Desktop + WSL2) ──────────────────────
     deploy:
       resources:
         reservations:
@@ -44,6 +56,15 @@ services:
               count: 1
               capabilities: [gpu]
 
-# ── Named Volumes ─────────────────────────────────────────────────────
+# ── Named Volumes (persist models across restarts) ─────────────────────
 volumes:
-  qdrant_data:    # Qdrant's index files live here — persists across container restarts
+  qdrant_data:
+    driver: local
+  huggingface_cache:
+    driver: local
+  torch_cache:
+    driver: local
+  easyocr_cache:
+    driver: local
+  fastembed_cache:
+    driver: local
