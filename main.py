@@ -15,14 +15,31 @@ from qdrant_client import QdrantClient, models
 
 
 # --- 1. Load Environment Variables from .env ---
+load_dotenv()
 from openai import OpenAI
+import google.generativeai as genai
 
-# --- . Initialize Local LLM Client (LM Studio) ---
-local_client = OpenAI(
-    base_url="http://127.0.0.1:1234/v1", 
-    api_key="lm-studio"
-)
-LOCAL_MODEL = "gemma-4-e2b-it-Q4_K_M"
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "local").lower()
+LOCAL_MODEL = "Llama-3.2-3B-Instruct-Q4_K_M"
+
+# --- Initialize LLM Clients based on provider ---
+local_client = None
+gemini_model = None
+openai_client = None
+
+if LLM_PROVIDER == "gemini":
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    # Using Flash for speed and 1M context
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+    print("[BOOT] LLM Engine: Gemini 1.5 Flash (Cloud)")
+elif LLM_PROVIDER == "openai":
+    openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    print("[BOOT] LLM Engine: OpenAI (Cloud)")
+else:
+    # Default to LM Studio
+    LLM_PROVIDER = "local"
+    local_client = OpenAI(base_url="http://127.0.0.1:1234/v1", api_key="lm-studio")
+    print(f"[BOOT] LLM Engine: LM Studio Local ({LOCAL_MODEL})")
 
 # =====================================================================
 # THE SYSTEM PROMPT LIVES HERE (Global Scope)
@@ -79,7 +96,7 @@ class SearchQuery(BaseModel):
 
 class ChatQuery(BaseModel):
     query: str
-    video_id: str
+    target_video_ids: List[str]
     chat_history: List[Dict[str, str]] = []
 
 
@@ -98,21 +115,37 @@ ingestion_engine = LocalHotIngestionPipeline(
 # HELPERS
 # =====================================================================
 def optimize_query_with_llm(raw_query: str) -> str:
-    """Uses Local LM Studio (Gemma) to translate and optimize the raw user query."""
+    """Uses the configured LLM to translate and optimize the raw user query."""
     try:
-        response = local_client.chat.completions.create(
-            model=LOCAL_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": raw_query}
-            ],
-            temperature=0.1, # Keep it low so Gemma doesn't hallucinate fluff
-        )
-        optimized_string = response.choices[0].message.content.strip()
-        print(f"[Local LLM Router] Raw: '{raw_query}' -> Optimized: '{optimized_string}'")
+        if LLM_PROVIDER == "gemini":
+            prompt = f"{SYSTEM_PROMPT}\n\nUser Query:\n{raw_query}"
+            response = gemini_model.generate_content(prompt, generation_config={"temperature": 0.1})
+            optimized_string = response.text.strip()
+        elif LLM_PROVIDER == "openai":
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": raw_query}
+                ],
+                temperature=0.1,
+            )
+            optimized_string = response.choices[0].message.content.strip()
+        else: # local
+            response = local_client.chat.completions.create(
+                model=LOCAL_MODEL,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": raw_query}
+                ],
+                temperature=0.1,
+            )
+            optimized_string = response.choices[0].message.content.strip()
+
+        print(f"[{LLM_PROVIDER.upper()} Router] Raw: '{raw_query}' -> Optimized: '{optimized_string}'")
         return optimized_string
     except Exception as e:
-        print(f"[Local LLM Error] Is LM Studio running? Falling back to raw. Error: {e}")
+        print(f"[{LLM_PROVIDER.upper()} Error] Falling back to raw. Error: {e}")
         return raw_query
 
 # =====================================================================
@@ -130,11 +163,14 @@ async def get_thumbnail(video_id: str):
 
     # Find the media file for this video_id
     video_file = None
-    for filename in os.listdir("media"):
-        raw_name = os.path.splitext(filename)[0]
-        candidate_id = re.sub(r'\W+', '_', raw_name.lower()).strip('_')
-        if candidate_id == video_id:
-            video_file = os.path.join("media", filename)
+    for root, dirs, files in os.walk("media"):
+        for filename in files:
+            raw_name = os.path.splitext(filename)[0]
+            candidate_id = re.sub(r'\W+', '_', raw_name.lower()).strip('_')
+            if candidate_id == video_id:
+                video_file = os.path.join(root, filename)
+                break
+        if video_file:
             break
 
     if not video_file:
@@ -174,10 +210,13 @@ async def serve_ui():
 
 
 # --- UPLOAD ENDPOINT ---
+from fastapi import Form
+
 @app.post("/upload")
-async def upload_video(file: UploadFile = File(...)):
+async def upload_video(file: UploadFile = File(...), folder_path: str = Form(None)):
     """
     Saves an uploaded video to /media with MIME type and size validation.
+    Optionally saves it inside a subdirectory if folder_path is provided.
     Accepts: MP4 and MKV. Max size: 2 GB.
     """
     # Validate MIME type
@@ -190,7 +229,24 @@ async def upload_video(file: UploadFile = File(...)):
     if not os.path.exists("media"):
         os.makedirs("media")
 
-    file_path = f"media/{file.filename}"
+    # Secure the filename to just its basename
+    raw_filename = file.filename.replace("\\", "/")
+    safe_basename = os.path.basename(raw_filename)
+    
+    # If folder_path is missing, try inferring from the client's raw filename
+    if not folder_path or folder_path == "undefined":
+        folder_path = os.path.dirname(raw_filename)
+
+    target_dir = "media"
+    if folder_path and folder_path != "undefined":
+        # Allow alphanumeric, underscore, hyphen, space, and forward slash for nested folders
+        clean_folder = re.sub(r'[^a-zA-Z0-9_\-\ /]', '', folder_path).strip()
+        clean_folder = clean_folder.replace('//', '/').strip('/')
+        if clean_folder:
+            target_dir = os.path.join("media", clean_folder)
+            
+    os.makedirs(target_dir, exist_ok=True)
+    file_path = os.path.join(target_dir, safe_basename).replace("\\", "/")
     bytes_written = 0
     chunk_size = 1024 * 1024  # 1 MB chunks
 
@@ -215,7 +271,7 @@ async def upload_video(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
 
     # Generate the clean ID (matches ingestion + library logic)
-    raw_name = os.path.splitext(file.filename)[0]
+    raw_name = os.path.splitext(safe_basename)[0]
     clean_id = re.sub(r'\W+', '_', raw_name.lower()).strip('_')
 
     return {
@@ -239,28 +295,35 @@ async def ingest_video_stream(video_id: str, file_path: str):
 # --- LIBRARY ENDPOINT ---
 @app.get("/library")
 def get_media_library():
-    """Dynamically scans the media folder and returns all video IDs, titles, and file sizes."""
+    """Dynamically scans the media folder and returns all video IDs, titles, file sizes, and folders."""
     video_lib = {}
     title_lib = {}
     size_lib = {}
+    folder_lib = {}
     media_dir = "media"
 
     if not os.path.exists(media_dir):
-        return {"videoLibrary": {}, "titleLibrary": {}, "sizeLibrary": {}}
+        return {"videoLibrary": {}, "titleLibrary": {}, "sizeLibrary": {}, "folderLibrary": {}}
 
-    for filename in os.listdir(media_dir):
-        if filename.endswith(".mp4") or filename.endswith(".mkv"):
-            raw_name = os.path.splitext(filename)[0]
-            clean_id = re.sub(r'\W+', '_', raw_name.lower()).strip('_')
+    for root, dirs, files in os.walk(media_dir):
+        for filename in files:
+            if filename.endswith(".mp4") or filename.endswith(".mkv"):
+                raw_name = os.path.splitext(filename)[0]
+                clean_id = re.sub(r'\W+', '_', raw_name.lower()).strip('_')
+                
+                rel_path = os.path.relpath(os.path.join(root, filename), media_dir)
+                folder_name = os.path.dirname(rel_path).replace('\\', '/')
 
-            video_lib[clean_id] = f"/media/{filename}"
-            title_lib[clean_id] = raw_name.replace("_", " ")
-            size_lib[clean_id] = os.path.getsize(os.path.join(media_dir, filename))
+                video_lib[clean_id] = f"/media/{rel_path.replace(os.sep, '/')}"
+                title_lib[clean_id] = raw_name.replace("_", " ")
+                size_lib[clean_id] = os.path.getsize(os.path.join(root, filename))
+                folder_lib[clean_id] = folder_name
 
     return {
         "videoLibrary": video_lib,
         "titleLibrary": title_lib,
-        "sizeLibrary": size_lib
+        "sizeLibrary": size_lib,
+        "folderLibrary": folder_lib
     }
 
 
@@ -330,62 +393,99 @@ def search_video(request: SearchQuery):
 # =====================================================================
 @app.post("/chat")
 def chat_with_video(request: ChatQuery):
-    """Handles multi-turn Q&A and summarization about a specific video."""
+    """Handles multi-turn Q&A and summarization about specific video(s)."""
 
-    # 1. Retrieve the full transcript for the target video
-    records, _ = client.scroll(
-        collection_name="video_segments",
-        scroll_filter=models.Filter(must=[
-            models.FieldCondition(
-                key="video_id",
-                match=models.MatchValue(value=request.video_id)
-            )
-        ]),
-        limit=1000,
-        with_payload=True,
-        with_vectors=False
-    )
+    if not request.target_video_ids:
+        return {"answer": "Error: No videos selected for chat."}
+
+    # 1. Retrieve the full transcript for the target videos
+    records = []
+    for vid_id in request.target_video_ids:
+        v_records, _ = client.scroll(
+            collection_name="video_segments",
+            scroll_filter=models.Filter(must=[
+                models.FieldCondition(
+                    key="video_id",
+                    match=models.MatchValue(value=vid_id)
+                )
+            ]),
+            limit=1000,
+            with_payload=True,
+            with_vectors=False
+        )
+        records.extend(v_records)
 
     if not records:
-        return {"answer": f"Error: No data found for video '{request.video_id}' in the database."}
+        return {"answer": f"Error: No data found for the selected videos in the database."}
 
     # ---> THIS IS THE LINE YOU WERE MISSING <---
     records.sort(key=lambda x: x.payload.get("start_timestamp", 0))
     full_transcript = " ".join([r.payload.get("transcript", "") for r in records])
 
-    # --- HARDWARE LIMIT FIX ---
-    # 1 token is roughly 4 characters. By limiting to 8000 chars (~2000 tokens), 
-    # we force the GPU to process the prompt in ~6 seconds instead of 65 seconds.
-    MAX_CHARS = 8000
-    if len(full_transcript) > MAX_CHARS:
-        full_transcript = full_transcript[:MAX_CHARS] + "\n...[TRANSCRIPT TRUNCATED DUE TO GPU MEMORY LIMITS]"
+    # --- CONTEXT LIMIT HANDLING ---
+    if LLM_PROVIDER == "local":
+        # 1 token is roughly 4 characters. By limiting to 8000 chars (~2000 tokens), 
+        # we force the GPU to process the prompt in ~6 seconds instead of 65 seconds.
+        MAX_CHARS = 8000
+        if len(full_transcript) > MAX_CHARS:
+            full_transcript = full_transcript[:MAX_CHARS] + "\n...[TRANSCRIPT TRUNCATED DUE TO LOCAL GPU MEMORY LIMITS]"
+    else:
+        # Cloud providers (Gemini/OpenAI) can handle massive context natively. No truncation needed.
+        pass
 
     # 2. Build the System Prompt with the Transcript
     system_instruction = f"""You are an AI Video Assistant. Based ONLY on the following video transcript, answer the user's question.
     Transcript:
     {full_transcript}"""
-    # 3. Format the chat history for Gemma natively
-    messages = [{"role": "system", "content": system_instruction}]
     
-    if request.chat_history:
-        for msg in request.chat_history:
-            # Map frontend roles to OpenAI format
-            role = "user" if msg["role"] == "user" else "assistant"
-            messages.append({"role": role, "content": msg["content"]})
-            
-    # Add the current user query
-    messages.append({"role": "user", "content": request.query})
-
-    # 4. Generate the response locally
+    # 3. Format the chat history
     try:
-        response = local_client.chat.completions.create(
-            model=LOCAL_MODEL,
-            messages=messages,
-            temperature=0.7
-        )
-        return {"answer": response.choices[0].message.content.strip()}
+        if LLM_PROVIDER == "gemini":
+            # Map frontend roles to Gemini format
+            gemini_history = []
+            for msg in request.chat_history:
+                role = "user" if msg["role"] == "user" else "model"
+                gemini_history.append({"role": role, "parts": [msg["content"]]})
+            
+            try:
+                gemini_model_with_sys = genai.GenerativeModel(
+                    'gemini-1.5-flash', 
+                    system_instruction=system_instruction
+                )
+                query_text = request.query
+            except TypeError:
+                # Fallback for older SDKs
+                gemini_model_with_sys = genai.GenerativeModel('gemini-1.5-flash')
+                query_text = f"{system_instruction}\n\nUser Question:\n{request.query}"
+            
+            chat = gemini_model_with_sys.start_chat(history=gemini_history)
+            response = chat.send_message(query_text, generation_config={"temperature": 0.7})
+            return {"answer": response.text.strip()}
+            
+        else:
+            # OpenAI / LM Studio Format
+            messages = [{"role": "system", "content": system_instruction}]
+            for msg in request.chat_history:
+                role = "user" if msg["role"] == "user" else "assistant"
+                messages.append({"role": role, "content": msg["content"]})
+            messages.append({"role": "user", "content": request.query})
+
+            if LLM_PROVIDER == "openai":
+                response = openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    temperature=0.7
+                )
+            else: # local
+                response = local_client.chat.completions.create(
+                    model=LOCAL_MODEL,
+                    messages=messages,
+                    temperature=0.7
+                )
+            return {"answer": response.choices[0].message.content.strip()}
+
     except Exception as e:
-        return {"answer": f"API Error: Make sure LM Studio local server is running! Details: {e}"}
+        return {"answer": f"[{LLM_PROVIDER.upper()} API Error] Details: {e}"}
 
 
 # =====================================================================
@@ -426,12 +526,15 @@ def delete_video(video_id: str, delete_file: bool = Query(default=True)):
     # 3. Optionally delete the media file from disk
     file_deleted = False
     if delete_file and os.path.exists("media"):
-        for filename in os.listdir("media"):
-            raw_name = os.path.splitext(filename)[0]
-            candidate_id = re.sub(r'\W+', '_', raw_name.lower()).strip('_')
-            if candidate_id == video_id:
-                os.remove(os.path.join("media", filename))
-                file_deleted = True
+        for root, dirs, files in os.walk("media"):
+            for filename in files:
+                raw_name = os.path.splitext(filename)[0]
+                candidate_id = re.sub(r'\W+', '_', raw_name.lower()).strip('_')
+                if candidate_id == video_id:
+                    os.remove(os.path.join(root, filename))
+                    file_deleted = True
+                    break
+            if file_deleted:
                 break
 
     return {
@@ -440,6 +543,39 @@ def delete_video(video_id: str, delete_file: bool = Query(default=True)):
         "vectors_deleted": vectors_deleted,
         "file_deleted": file_deleted
     }
+
+class MoveRequest(BaseModel):
+    new_folder: str
+
+@app.post("/video/{video_id}/move")
+def move_video(video_id: str, request: MoveRequest):
+    """Moves a video file to a new folder inside /media"""
+    if not os.path.exists("media"):
+        return {"success": False, "error": "Media directory not found."}
+        
+    # Sanitize new folder name
+    clean_folder = re.sub(r'[^a-zA-Z0-9_\-\ ]', '', request.new_folder).strip()
+    target_dir = os.path.join("media", clean_folder) if clean_folder else "media"
+    
+    os.makedirs(target_dir, exist_ok=True)
+    
+    # Find current file
+    moved = False
+    for root, dirs, files in os.walk("media"):
+        for filename in files:
+            raw_name = os.path.splitext(filename)[0]
+            candidate_id = re.sub(r'\W+', '_', raw_name.lower()).strip('_')
+            if candidate_id == video_id:
+                old_path = os.path.join(root, filename)
+                new_path = os.path.join(target_dir, filename)
+                if old_path != new_path:
+                    shutil.move(old_path, new_path)
+                moved = True
+                break
+        if moved:
+            break
+            
+    return {"success": moved}
 
 
 if __name__ == "__main__":
