@@ -1,25 +1,49 @@
-# --- Secrets ---
+# --- Secrets & Config ---
 .env
+.env.*
+settings.json
+credentials.json
 
 # --- Python ---
-.venv/
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+.venv/
+venv/
+env/
+ENV/
 
-# --- Data / DB ---
+# --- ML / AI Models ---
+models/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.bin
+*.h5
+
+# --- Database & Media Storage ---
 qdrant_db/
 media/
+*.sqlite3
+*.db
 
-# --- Kaggle workspace mirror ---
-kaggle/
+# --- OS / Logs ---
+.DS_Store
+Thumbs.db
+*.log
 
 # --- IDE ---
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# --  DOCs   --
-Docs/render_and_push.py
-Docs/render_and_push.ps1
+# --- Other Project Folders ---
+kaggle/
 Docs/

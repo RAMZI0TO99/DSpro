@@ -1,20 +1,43 @@
+# --- Secrets & Config ---
+.env
+.env.*
+settings.json
+
+# --- Python & Envs ---
 __pycache__/
+*.py[cod]
+*$py.class
 .venv/
 venv/
-*.pyc
-.DS_Store
-.env
+env/
+
+# --- Git ---
 .git/
+.gitignore
 
-# Exclude test/dev artifacts from the image
-test/
-kaggle/
-*.pdf
-
-# We ignore the media and DB folders during the build phase
-# because we mount them dynamically as Docker volumes at runtime.
-media/
+# --- App Data (Mounted dynamically via volumes) ---
 qdrant_db/
+media/
 
-# Ignore Documentation
+# --- ML Models ---
+# We ignore these during build if we mount them, 
+# or if the Dockerfile script dynamically downloads them.
+models/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.bin
+
+# --- OS & IDE ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+
+# --- Unused Folders ---
+kaggle/
 Docs/
+test/
+*.pdf

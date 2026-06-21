@@ -1,3 +1,4 @@
+import os
 import gc
 import cv2
 import torch
@@ -35,7 +36,12 @@ class LocalHotIngestionPipeline:
         print("[BOOT] Docking EasyOCR into VRAM...")
         # verbose=False suppresses the progress bar that uses Unicode block chars (█)
         # which crash on Windows cp1252 console encoding. Model still downloads silently.
-        self.ocr_reader = easyocr.Reader(['en', 'ar'], gpu=True, verbose=False)
+        self.ocr_reader = easyocr.Reader(
+            ['en', 'ar'], 
+            gpu=True, 
+            verbose=False,
+            model_storage_directory=os.path.abspath("./models/easyocr/model")
+        )
 
         print("[BOOT COMPLETE] Ingestion Engine is HOT.\n")
 
