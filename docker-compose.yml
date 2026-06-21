@@ -9,6 +9,11 @@ services:
       - "6334:6334"   # gRPC
     volumes:
       - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:6333/readyz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   # ── FastAPI Backend ───────────────────────────────────────────────────
@@ -42,9 +47,14 @@ services:
       - easyocr_cache:/root/.EasyOCR
       - fastembed_cache:/root/.local/share/fastembed
       
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       qdrant:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
     # ── GPU passthrough (Docker Desktop + WSL2) ──────────────────────

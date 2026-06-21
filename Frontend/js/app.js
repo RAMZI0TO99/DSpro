@@ -883,12 +883,12 @@ function updateSettingsFields() {
 
         // Auto-fill defaults if empty
         if (val === 'ollama' && (!settingsBaseurl.value || settingsBaseurl.value.includes('1234') || settingsBaseurl.value.includes('api.openai.com'))) {
-            settingsBaseurl.value = 'http://localhost:11434/v1';
+            settingsBaseurl.value = 'http://host.docker.internal:11434/v1';
             settingsModel.value = 'llama3';
         } else if (val === 'local' && (!settingsBaseurl.value || settingsBaseurl.value.includes('11434') || settingsBaseurl.value.includes('api.openai.com'))) {
-            settingsBaseurl.value = 'http://127.0.0.1:1234/v1';
+            settingsBaseurl.value = 'http://host.docker.internal:1234/v1';
             settingsModel.value = 'Llama-3.2-3B-Instruct-Q4_K_M';
-        } else if (val === 'custom' && (!settingsBaseurl.value || settingsBaseurl.value.includes('127.0.0.1') || settingsBaseurl.value.includes('localhost'))) {
+        } else if (val === 'custom' && (!settingsBaseurl.value || settingsBaseurl.value.includes('host.docker.internal') || settingsBaseurl.value.includes('127.0.0.1') || settingsBaseurl.value.includes('localhost'))) {
             settingsBaseurl.value = 'https://api.openai.com/v1';
             settingsModel.value = 'gpt-4o-mini';
         }

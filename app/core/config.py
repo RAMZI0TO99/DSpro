@@ -27,7 +27,7 @@ def load_settings() -> LLMSettings:
     return LLMSettings(
         provider=env_provider,
         api_key=env_api_key,
-        base_url="http://127.0.0.1:1234/v1",
+        base_url="http://host.docker.internal:1234/v1",
         model="Llama-3.2-3B-Instruct-Q4_K_M"
     )
 
