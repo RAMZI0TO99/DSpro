@@ -9,11 +9,6 @@ services:
       - "6334:6334"   # gRPC
     volumes:
       - qdrant_data:/qdrant/storage
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:6333/readyz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     restart: unless-stopped
 
   # ── FastAPI Backend ───────────────────────────────────────────────────
@@ -33,20 +28,16 @@ services:
       - TORCH_HOME=/root/.cache/torch
       - EASYOCR_HOME=/root/.EasyOCR
       - HF_HOME=/root/.cache/huggingface
-      - HF_HUB_LOCAL_FILES_ONLY=0
+      - HF_HUB_LOCAL_FILES_ONLY=1
     volumes:
       # Application & media
       - ./media:/app/media
-      
-      # ── MODEL CACHES (PERSIST across restarts) ──
-      # These map host directories → container cache directories
-      # Models downloaded during build are cached here
-      # On subsequent runs, models load from cache BEFORE attempting network download
+      - clip_cache:/root/.cache/clip
       - huggingface_cache:/root/.cache/huggingface
       - torch_cache:/root/.cache/torch
       - easyocr_cache:/root/.EasyOCR
       - fastembed_cache:/root/.local/share/fastembed
-      
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
@@ -54,7 +45,7 @@ services:
       retries: 3
     depends_on:
       qdrant:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
 
     # ── GPU passthrough (Docker Desktop + WSL2) ──────────────────────
@@ -77,4 +68,6 @@ volumes:
   easyocr_cache:
     driver: local
   fastembed_cache:
+    driver: local
+  clip_cache:
     driver: local

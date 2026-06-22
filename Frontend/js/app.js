@@ -309,6 +309,7 @@ async function handleSearch() {
 
     addMessage('user', query);
     userInput.value = '';
+    setInputState(true);
 
     const thinking = addMessage('ai', '🧠 Searching tri-modal vector database', true);
     const topK = parseInt(topkSlider.value, 10);

@@ -14,7 +14,7 @@ from fastembed import SparseTextEmbedding
 class LocalHotIngestionPipeline:
     def __init__(self, clip_model, clip_tokenizer, clip_transform, db_client):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"\n[BOOT] Initializing Local Hot Ingestion on {self.device}...")
+        print(f"\n[BOOT-INGESTION] Initializing Local Hot Ingestion on {self.device}...")
 
         self.db_client = db_client
         self._ensure_collection_exists()
@@ -25,7 +25,7 @@ class LocalHotIngestionPipeline:
         self.clip_tokenizer = clip_tokenizer
         self.clip_transform = clip_transform
 
-        print("[BOOT] Docking WhisperX (Base) into VRAM...")
+        print("[BOOT-INGESTION] Docking WhisperX (Base) into VRAM...")
         self.audio_model = whisperx.load_model("base", device=self.device, compute_type="float16")
 
         # FIX 2: Don't pre-load a single align model at boot.
@@ -33,17 +33,20 @@ class LocalHotIngestionPipeline:
         # We cache loaded align models here so we never reload for the same language.
         self._align_model_cache = {}
 
-        print("[BOOT] Docking EasyOCR into VRAM...")
+        print("[BOOT-INGESTION] Docking EasyOCR into VRAM...")
         # verbose=False suppresses the progress bar that uses Unicode block chars (█)
         # which crash on Windows cp1252 console encoding. Model still downloads silently.
         self.ocr_reader = easyocr.Reader(
             ['en', 'ar'], 
             gpu=True, 
             verbose=False,
-            model_storage_directory=os.path.abspath("./models/easyocr/model")
+            # Use absolute path so it works both locally and inside Docker.
+            # In Docker, models are baked into /root/.EasyOCR/model via COPY.
+            # Locally, the EASYOCR_HOME env var handles the path via easyocr internals.
+            model_storage_directory=os.environ.get("EASYOCR_HOME", os.path.abspath("./models/easyocr")) + "/model"
         )
 
-        print("[BOOT COMPLETE] Ingestion Engine is HOT.\n")
+        print("[BOOT-INGESTION COMPLETE] Ingestion Engine is HOT.\n")
 
     def _get_align_model(self, language_code: str):
         """Returns a cached alignment model for the given language, loading if needed."""

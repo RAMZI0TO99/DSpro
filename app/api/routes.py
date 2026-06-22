@@ -2,7 +2,6 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Form, Bac
 from fastapi.responses import HTMLResponse, StreamingResponse, Response
 from pydantic import BaseModel
 import asyncio
-from pydantic import BaseModel
 import os
 import re
 import shutil
@@ -12,9 +11,36 @@ import json
 from app.core.schemas import SearchRequest, ChatRequest, VideoMoveRequest
 from app.core.config import llm_settings, save_settings, LLMSettings
 from app.services.llm_service import llm_service
-from app.services.vector_search import qdrant_client, clip_model, clip_tokenizer, bm25_model, device, ingestion_engine
+from app.services import vector_search
 import torch
 from qdrant_client import models
+
+# Helper to ensure models are loaded before use
+def _ensure_models_loaded():
+    vector_search._load_models()
+
+# Shortcuts to vector_search module attributes
+def get_qdrant_client():
+    return vector_search.qdrant_client
+
+def get_device():
+    return vector_search.device
+
+def get_clip_model():
+    _ensure_models_loaded()
+    return vector_search.clip_model
+
+def get_clip_tokenizer():
+    _ensure_models_loaded()
+    return vector_search.clip_tokenizer
+
+def get_bm25_model():
+    _ensure_models_loaded()
+    return vector_search.bm25_model
+
+def get_ingestion_engine():
+    _ensure_models_loaded()
+    return vector_search.ingestion_engine
 
 router = APIRouter()
 
@@ -163,6 +189,7 @@ def bg_ingest_task(video_id: str, file_path: str):
     """Runs the heavy ML ingestion loop in a separate thread."""
     active_ingestions[video_id] = {"last_message": "data: [0/4] Starting...\n\n", "done": False, "error": None}
     try:
+        ingestion_engine = get_ingestion_engine()
         for msg in ingestion_engine.process_video_stream(file_path, video_id):
             if video_id in active_ingestions:
                 active_ingestions[video_id]["last_message"] = msg
@@ -258,6 +285,14 @@ def get_media_library():
 @router.post("/search")
 def search_video(request: SearchRequest):
     """Tri-modal hybrid search using CLIP visual + CLIP audio-text + BM25, fused with RRF."""
+    _ensure_models_loaded()
+    
+    clip_model = get_clip_model()
+    clip_tokenizer = get_clip_tokenizer()
+    bm25_model = get_bm25_model()
+    device = get_device()
+    qdrant_client = get_qdrant_client()
+    
     # 1. Intercept and Optimize with LLM
     optimized_query = llm_service.optimize_query(request.query, llm_settings.provider, llm_settings.model)
 
@@ -321,6 +356,13 @@ def search_video(request: SearchRequest):
 @router.post("/chat")
 def chat_with_video(request: ChatRequest):
     """Handles multi-turn Q&A with transparent 'Thought Streaming' and True Dynamic RAG."""
+    _ensure_models_loaded()
+    
+    clip_model = get_clip_model()
+    clip_tokenizer = get_clip_tokenizer()
+    bm25_model = get_bm25_model()
+    device = get_device()
+    qdrant_client = get_qdrant_client()
     
     if not request.target_video_ids:
         return {"answer": "Error: No videos selected for chat."}
@@ -409,7 +451,7 @@ def chat_with_video(request: ChatRequest):
             current_chars = 0
             
             for r in search_results.points:
-                score = r.score
+                score = min(r.score, 1.0)  # Cap score to 1.0 for consistency
                 if score < 0.3:
                     continue # Skip low relevance chunks
                     
@@ -471,6 +513,8 @@ def delete_video(video_id: str, delete_file: bool = Query(default=True)):
     Deletes all Qdrant vectors for a given video_id.
     If delete_file=True (default), also removes the media file from disk.
     """
+    qdrant_client = get_qdrant_client()
+    
     # 1. Count points before deletion for the response
     count_result = qdrant_client.count(
         collection_name="video_segments",
@@ -574,4 +618,3 @@ def update_llm_settings(new_settings: dict):
         return {"success": True, "message": "LLM Settings updated and loaded successfully."}
     except Exception as e:
         return {"success": False, "error": str(e)}
-

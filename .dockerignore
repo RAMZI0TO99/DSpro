@@ -18,16 +18,7 @@ env/
 # --- App Data (Mounted dynamically via volumes) ---
 qdrant_db/
 media/
-
-# --- ML Models ---
-# We ignore these during build if we mount them, 
-# or if the Dockerfile script dynamically downloads them.
 models/
-*.pt
-*.pth
-*.onnx
-*.safetensors
-*.bin
 
 # --- OS & IDE ---
 .DS_Store
