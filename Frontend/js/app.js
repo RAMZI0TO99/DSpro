@@ -11,6 +11,8 @@ let chatContextMode = "video";
 let conversationHistory = [];
 let pendingDeleteId = null;
 let pendingMoveId = null;
+let currentAbortController = null;
+let activeIngestVideoId = null;
 
 // ============================================================
 // DOM REFS
@@ -19,6 +21,7 @@ const chatHistory = document.getElementById('chat-history');
 const userInput = document.getElementById('user-input');
 const searchBtn = document.getElementById('search-btn');
 const chatBtn = document.getElementById('chat-btn');
+const cancelBtn = document.getElementById('cancel-btn');
 const videoPlayer = document.getElementById('main-video');
 const nowPlayingTitle = document.getElementById('now-playing-title');
 const videoList = document.getElementById('video-list');
@@ -26,6 +29,8 @@ const libraryEmpty = document.getElementById('library-empty');
 const resultCard = document.getElementById('result-card');
 const resultContainer = document.getElementById('result-cards-container');
 const ingestStatus = document.getElementById('ingest-status');
+const ingestFilename = document.getElementById('ingest-filename');
+const cancelIngestBtn = document.getElementById('cancel-ingest-btn');
 const topkSlider = document.getElementById('topk-slider');
 const topkValue = document.getElementById('topk-value');
 
@@ -58,14 +63,39 @@ function setInputState(disabled) {
     searchBtn.disabled = disabled;
     chatBtn.disabled = disabled;
     if (disabled) {
+        cancelBtn.style.display = 'inline-block';
+        searchBtn.style.display = 'none';
+        chatBtn.style.display = 'none';
         userInput.placeholder = "Processing... Please wait.";
         userInput.style.opacity = "0.5";
     } else {
-        userInput.placeholder = "Ask a question or search for a moment...";
+        cancelBtn.style.display = 'none';
+        searchBtn.style.display = 'inline-block';
+        chatBtn.style.display = 'inline-block';
+        userInput.placeholder = "Ask a question or search for something...";
         userInput.style.opacity = "1";
         setTimeout(() => userInput.focus(), 100);
     }
 }
+
+cancelBtn.addEventListener('click', () => {
+    if (currentAbortController) {
+        currentAbortController.abort();
+        currentAbortController = null;
+    }
+});
+
+cancelIngestBtn.addEventListener('click', async () => {
+    if (activeIngestVideoId) {
+        cancelIngestBtn.disabled = true;
+        cancelIngestBtn.textContent = 'Cancelling...';
+        try {
+            await fetch('/api/ingest/' + encodeURIComponent(activeIngestVideoId) + '/cancel', { method: 'POST' });
+        } catch (e) {
+            console.error('Failed to send cancel request', e);
+        }
+    }
+});
 
 function formatBytes(bytes) {
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -242,7 +272,7 @@ function updateChatContextUI() {
         toggleDiv = document.createElement('div');
         toggleDiv.id = 'chat-context-toggle';
         toggleDiv.innerHTML = `
-            <label><input type="radio" name="chat_ctx" value="video" checked> Current Video</label>
+            <label><input type="radio" name="chat_ctx" value="video" checked> Current File</label>
             <label style="margin-left:8px"><input type="radio" name="chat_ctx" value="folder"> Entire Folder</label>
         `;
         toggleDiv.style.marginBottom = "10px";
@@ -254,7 +284,14 @@ function updateChatContextUI() {
             if (chatContextMode === 'folder') {
                 chatHistory.innerHTML = `<div class="message msg-ai">👋 Changed context to "Folder: ${activeFolderId}". Ask me anything about this folder!</div>`;
             } else {
-                chatHistory.innerHTML = `<div class="message msg-ai">👋 Changed context to "${titleLibrary[activeVideoId] || activeVideoId}". Ask me anything about this video!</div>`;
+                let mediaTypeStr = "video";
+                if (activeVideoId && videoLibrary[activeVideoId]) {
+                    const ext = videoLibrary[activeVideoId].split('.').pop().toLowerCase();
+                    if (ext === "pdf") mediaTypeStr = "document";
+                    else if (["jpg", "jpeg", "png", "webp"].includes(ext)) mediaTypeStr = "image";
+                    else if (["mp3", "wav", "m4a"].includes(ext)) mediaTypeStr = "audio file";
+                }
+                chatHistory.innerHTML = `<div class="message msg-ai">👋 Changed context to "${titleLibrary[activeVideoId] || activeVideoId}". Ask me anything about this ${mediaTypeStr}!</div>`;
             }
         });
 
@@ -284,18 +321,52 @@ function setActiveVideo(id) {
     });
 
     // Reset Chat History visually when switching context
-    chatHistory.innerHTML = `<div class="message msg-ai">👋 Changed context to "${titleLibrary[id] || id}". Ask me anything about this video!</div>`;
+    let mediaTypeStr = "video";
+    if (id && videoLibrary[id]) {
+        const ext = videoLibrary[id].split('.').pop().toLowerCase();
+        if (ext === "pdf") mediaTypeStr = "document";
+        else if (["jpg", "jpeg", "png", "webp"].includes(ext)) mediaTypeStr = "image";
+        else if (["mp3", "wav", "m4a"].includes(ext)) mediaTypeStr = "audio file";
+    }
+    chatHistory.innerHTML = `<div class="message msg-ai">👋 Changed context to "${titleLibrary[id] || id}". Ask me anything about this ${mediaTypeStr}!</div>`;
 
     // Update sidebar highlight
     document.querySelectorAll('.video-card').forEach(c => c.classList.remove('active'));
     const card = document.getElementById(`vcard-${id}`);
     if (card) card.classList.add('active');
 
-    // Update player
+    // Update player based on media type
     nowPlayingTitle.textContent = titleLibrary[id] || id;
-    videoPlayer.src = videoLibrary[id];
-    videoPlayer.load();
-    videoPlayer.play().catch(e => console.log("Autoplay blocked by browser:", e));
+    const mediaUrl = videoLibrary[id];
+    const ext = mediaUrl.split('.').pop().toLowerCase();
+
+    const mainImage = document.getElementById('main-image');
+    const mainPdf = document.getElementById('main-pdf');
+
+    if (ext === "pdf") {
+        // PDF Mode
+        videoPlayer.style.display = 'none';
+        videoPlayer.pause();
+        mainImage.style.display = 'none';
+        mainPdf.style.display = 'block';
+        mainPdf.src = mediaUrl;
+    } else if (["jpg", "jpeg", "png", "webp"].includes(ext)) {
+        // Image Mode
+        videoPlayer.style.display = 'none';
+        videoPlayer.pause();
+        mainPdf.style.display = 'none';
+        mainImage.style.display = 'block';
+        mainImage.src = mediaUrl;
+    } else {
+        // Video / Audio Mode
+        mainImage.style.display = 'none';
+        mainPdf.style.display = 'none';
+        videoPlayer.style.display = 'block';
+        videoPlayer.src = mediaUrl;
+        videoPlayer.load();
+        videoPlayer.play().catch(e => console.log("Autoplay blocked by browser:", e));
+    }
+
     updateChatContextUI();
 } // Note: result cards are NOT cleared here — user must click ✕ to dismiss them
 
@@ -314,11 +385,14 @@ async function handleSearch() {
     const thinking = addMessage('ai', '🧠 Searching tri-modal vector database', true);
     const topK = parseInt(topkSlider.value, 10);
 
+    currentAbortController = new AbortController();
+
     try {
         const res = await fetch('/search', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query, top_k: topK })
+            body: JSON.stringify({ query, top_k: topK }),
+            signal: currentAbortController.signal
         });
         const data = await res.json();
         removeElement(thinking);
@@ -338,12 +412,18 @@ async function handleSearch() {
 
                 addMessage('ai', `🎯 Found ${data.results.length} result${data.results.length > 1 ? 's' : ''}. Jumping to ${formatTime(best.start_timestamp)} in "${titleLibrary[best.video_id] || best.video_id}".`);
 
-                videoPlayer.onloadedmetadata = () => {
+                const ext = videoLibrary[best.video_id].split('.').pop().toLowerCase();
+                if (ext === "pdf") {
+                    const mainPdf = document.getElementById('main-pdf');
+                    mainPdf.src = videoLibrary[best.video_id] + "#page=" + Math.floor(best.start_timestamp);
+                } else if (!["jpg", "jpeg", "png", "webp"].includes(ext)) {
+                    videoPlayer.onloadedmetadata = () => {
+                        videoPlayer.currentTime = best.start_timestamp;
+                        videoPlayer.play().catch(e => console.log("Play error:", e));
+                    };
                     videoPlayer.currentTime = best.start_timestamp;
-                    videoPlayer.play();
-                };
-                videoPlayer.currentTime = best.start_timestamp;
-                videoPlayer.play();
+                    videoPlayer.play().catch(e => console.log("Play error:", e));
+                }
             }
         } else {
             resultCard.classList.remove('visible');
@@ -351,8 +431,13 @@ async function handleSearch() {
         }
     } catch (e) {
         removeElement(thinking);
-        addMessage('ai', '⚠️ Error connecting to the backend /search API.');
+        if (e.name === 'AbortError') {
+            addMessage('ai', '🛑 Search canceled.');
+        } else {
+            addMessage('ai', '⚠️ Error connecting to the backend /search API.');
+        }
     } finally {
+        currentAbortController = null;
         setInputState(false);
     }
 }
@@ -391,12 +476,18 @@ function renderResultCards(results) {
 
             if (activeVideoId !== r.video_id) setActiveVideo(r.video_id);
 
-            videoPlayer.onloadedmetadata = () => {
+            const ext = videoLibrary[r.video_id].split('.').pop().toLowerCase();
+            if (ext === "pdf") {
+                const mainPdf = document.getElementById('main-pdf');
+                mainPdf.src = videoLibrary[r.video_id] + "#page=" + Math.floor(r.start_timestamp);
+            } else if (!["jpg", "jpeg", "png", "webp"].includes(ext)) {
+                videoPlayer.onloadedmetadata = () => {
+                    videoPlayer.currentTime = r.start_timestamp;
+                    videoPlayer.play().catch(e => console.log("Play error:", e));
+                };
                 videoPlayer.currentTime = r.start_timestamp;
-                videoPlayer.play();
-            };
-            videoPlayer.currentTime = r.start_timestamp;
-            videoPlayer.play();
+                videoPlayer.play().catch(e => console.log("Play error:", e));
+            }
         });
 
         resultContainer.appendChild(item);
@@ -434,6 +525,8 @@ async function handleChat() {
     setInputState(true);
     const thinking = addMessage('ai', `🤖 Analyzing "${contextName}"`, true);
 
+    currentAbortController = new AbortController();
+
     try {
         const res = await fetch('/chat', {
             method: 'POST',
@@ -442,7 +535,8 @@ async function handleChat() {
                 query,
                 target_video_ids: targetIds,
                 chat_history: previousHistory
-            })
+            }),
+            signal: currentAbortController.signal
         });
 
         if (!res.ok) throw new Error('Network error');
@@ -491,8 +585,13 @@ async function handleChat() {
         conversationHistory.push({ role: 'ai', content: finalHistoryText });
     } catch (e) {
         removeElement(thinking);
-        addMessage('ai', '⚠️ Error connecting to the backend /chat API.');
+        if (e.name === 'AbortError') {
+            addMessage('ai', '🛑 Chat generation canceled.');
+        } else {
+            addMessage('ai', '⚠️ Error connecting to the backend /chat API.');
+        }
     } finally {
+        currentAbortController = null;
         setInputState(false);
     }
 }
@@ -533,13 +632,14 @@ let isIngesting = false;
 function handleFilesSelected(files) {
     if (!files || files.length === 0) return;
 
+    const validExts = ['.mp4', '.mkv', '.mp3', '.wav', '.m4a', '.jpg', '.jpeg', '.png', '.webp', '.pdf'];
     const validFiles = Array.from(files).filter(f => {
         const name = f.name.toLowerCase();
-        return name.endsWith('.mp4') || name.endsWith('.mkv');
+        return validExts.some(ext => name.endsWith(ext));
     });
 
     if (validFiles.length === 0) {
-        ingestStatus.textContent = '❌ No valid MP4 or MKV files found.';
+        ingestStatus.textContent = '❌ No valid media files found (video/audio/image/pdf).';
         return;
     }
 
@@ -614,35 +714,65 @@ async function processIngestQueue() {
 }
 
 function startIngestStreamForQueue(videoId, filePath, fileName) {
+    activeIngestVideoId = videoId;
+    cancelIngestBtn.style.display = 'inline-block';
+    cancelIngestBtn.disabled = false;
+    // Removed textContent overwrite to keep it as small icon
+
     const streamUrl = `/ingest/${videoId}?file_path=${encodeURIComponent(filePath)}`;
     const eventSource = new EventSource(streamUrl);
 
     eventSource.onmessage = (event) => {
         const msg = event.data;
-        ingestStatus.textContent = `[${fileName}] ` + msg;
+        ingestFilename.textContent = fileName;
+        ingestStatus.textContent = msg;
 
         if (msg.includes('[1/4]')) setPhase(1);
         else if (msg.includes('[2/4]')) setPhase(2);
         else if (msg.includes('[3/4]')) setPhase(3);
         else if (msg.includes('[4/4]')) setPhase(4);
 
-        if (msg.includes('[COMPLETE]')) {
+        if (msg.includes('[COMPLETE]') || msg.includes('[CANCELED]')) {
             eventSource.close();
             setPhase(-1);
-            ingestStatus.textContent = `✅ Done with "${fileName}"!`;
-            setTimeout(processIngestQueue, 1500);
+            cancelIngestBtn.style.display = 'none';
+            activeIngestVideoId = null;
+
+            if (msg.includes('[CANCELED]')) {
+                ingestStatus.textContent = `🛑 Canceled.`;
+                // Refresh library to remove the canceled file
+                setTimeout(async () => {
+                    await bootSystem();
+                    ingestFilename.textContent = '';
+                    ingestStatus.textContent = '';
+                    hideProgress();
+                    setTimeout(processIngestQueue, 500);
+                }, 1500);
+            } else {
+                ingestStatus.textContent = `✅ Done!`;
+                setTimeout(() => {
+                    ingestFilename.textContent = '';
+                    processIngestQueue();
+                }, 1500);
+            }
         }
     };
 
     eventSource.onerror = () => {
         ingestStatus.textContent = `⚠️ Stream disconnected for "${fileName}".`;
         eventSource.close();
+        cancelIngestBtn.style.display = 'none';
+        activeIngestVideoId = null;
         setTimeout(processIngestQueue, 2000);
     };
 }
 
 // Keeping original startIngestStream for handleReingest backwards compatibility
 function startIngestStream(videoId, filePath) {
+    activeIngestVideoId = videoId;
+    cancelIngestBtn.style.display = 'inline-block';
+    cancelIngestBtn.disabled = false;
+
     const streamUrl = `/ingest/${videoId}?file_path=${encodeURIComponent(filePath)}`;
     const eventSource = new EventSource(streamUrl);
 
@@ -655,12 +785,21 @@ function startIngestStream(videoId, filePath) {
         else if (msg.includes('[3/4]')) setPhase(3);
         else if (msg.includes('[4/4]')) setPhase(4);
 
-        if (msg.includes('[COMPLETE]')) {
+        if (msg.includes('[COMPLETE]') || msg.includes('[CANCELED]')) {
             eventSource.close();
             setPhase(-1);
-            ingestStatus.textContent = '✅ Done! Refreshing library…';
+            cancelIngestBtn.style.display = 'none';
+            activeIngestVideoId = null;
+
+            if (msg.includes('[CANCELED]')) {
+                ingestStatus.textContent = '🛑 Canceled. Refreshing library…';
+            } else {
+                ingestStatus.textContent = '✅ Done! Refreshing library…';
+            }
+
             setTimeout(async () => {
                 await bootSystem();
+                ingestFilename.textContent = '';
                 ingestStatus.textContent = '';
                 hideProgress();
             }, 1500);
@@ -668,9 +807,15 @@ function startIngestStream(videoId, filePath) {
     };
 
     eventSource.onerror = () => {
-        ingestStatus.textContent = '⚠️ Stream disconnected.';
+        ingestStatus.textContent = '⚠️ Connection lost.';
         eventSource.close();
-        hideProgress();
+        cancelIngestBtn.style.display = 'none';
+        activeIngestVideoId = null;
+        setTimeout(() => {
+            ingestFilename.textContent = '';
+            ingestStatus.textContent = '';
+            hideProgress();
+        }, 2000);
     };
 }
 

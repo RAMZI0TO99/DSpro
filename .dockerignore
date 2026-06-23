@@ -18,7 +18,8 @@ env/
 # --- App Data (Mounted dynamically via volumes) ---
 qdrant_db/
 media/
-models/
+
+
 
 # --- OS & IDE ---
 .DS_Store

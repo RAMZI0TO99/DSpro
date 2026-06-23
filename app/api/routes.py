@@ -46,7 +46,16 @@ router = APIRouter()
 
 # --- Upload limits ---
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
-ALLOWED_MIME_TYPES = {"video/mp4", "video/x-matroska", "video/mkv"}
+ALLOWED_MIME_TYPES = {
+    # Video
+    "video/mp4", "video/x-matroska", "video/mkv",
+    # Audio
+    "audio/mpeg", "audio/wav", "audio/x-m4a",
+    # Image
+    "image/jpeg", "image/png", "image/webp",
+    # Document
+    "application/pdf"
+}
 
 # =====================================================================
 # ROUTES
@@ -76,26 +85,62 @@ async def get_thumbnail(video_id: str):
     if not video_file:
         raise HTTPException(status_code=404, detail=f"Video '{video_id}' not found.")
 
-    cap = cv2.VideoCapture(video_file)
-    if not cap.isOpened():
-        raise HTTPException(status_code=500, detail="Could not open video file.")
+    # --- Thumbnail Logic by Media Type ---
+    ext = os.path.splitext(video_file)[1].lower()
+    
+    if ext in [".jpg", ".jpeg", ".png", ".webp"]:
+        # If it's an image, just resize it
+        frame = cv2.imread(video_file)
+        if frame is None:
+            raise HTTPException(status_code=500, detail="Could not read image file.")
+    elif ext in [".mp3", ".wav", ".m4a"]:
+        # For audio, return a completely black frame with a music note (or just black for now)
+        import numpy as np
+        frame = np.zeros((240, 240, 3), dtype=np.uint8)
+        # Draw a simple blue box/text to represent audio
+        cv2.putText(frame, "AUDIO", (70, 130), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 200, 0), 2)
+    elif ext == ".pdf":
+        # For PDFs, use PyMuPDF to render the first page
+        import fitz
+        import numpy as np
+        try:
+            doc = fitz.open(video_file)
+            page = doc.load_page(0)
+            pix = page.get_pixmap(matrix=fitz.Matrix(1, 1))
+            # Convert pixmap to numpy array for cv2
+            img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+            # PyMuPDF produces RGB (or RGBA), cv2 expects BGR
+            if pix.n == 4:
+                frame = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
+            else:
+                frame = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        except Exception as e:
+            print(f"Error generating PDF thumbnail: {e}")
+            frame = np.zeros((240, 240, 3), dtype=np.uint8)
+            cv2.putText(frame, "PDF", (80, 130), cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 2)
+    else:
+        # Default Video handling
+        cap = cv2.VideoCapture(video_file)
+        if not cap.isOpened():
+            raise HTTPException(status_code=500, detail="Could not open video file.")
 
-    # Seek to 5% into the video to skip intros/black frames
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    target_frame = max(1, int(total_frames * 0.05))
-    cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+        # Seek to 5% into the video to skip intros/black frames
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        target_frame = max(1, int(total_frames * 0.05))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
 
-    ret, frame = cap.read()
-    cap.release()
+        ret, frame = cap.read()
+        cap.release()
 
-    if not ret:
-        raise HTTPException(status_code=500, detail="Could not extract frame from video.")
+        if not ret:
+            raise HTTPException(status_code=500, detail="Could not extract frame from video.")
 
     # Resize to a compact thumbnail size (width=240, maintain aspect ratio)
     h, w = frame.shape[:2]
     new_w = 240
-    new_h = int(h * (new_w / w))
-    frame = cv2.resize(frame, (new_w, new_h))
+    new_h = int(h * (new_w / w)) if w > 0 else 240
+    if new_w > 0 and new_h > 0:
+        frame = cv2.resize(frame, (new_w, new_h))
 
     # Encode as JPEG in memory
     _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -183,20 +228,69 @@ async def upload_video(file: UploadFile = File(...), folder_path: str = Form(Non
 
 
 # --- BACKGROUND ML JOBS ---
-active_ingestions = {}  # video_id -> {"last_message": str, "done": bool, "error": str}
+active_ingestions = {}  # video_id -> {"last_message": str, "done": bool, "error": str, "canceled": bool}
+
+def cleanup_canceled_video(video_id: str, file_path: str):
+    """Deletes vectors from Qdrant and removes the file from disk if ingestion is canceled."""
+    print(f"[CANCEL] Cleaning up resources for video {video_id}...")
+    try:
+        qdrant_client = get_qdrant_client()
+        from qdrant_client import models
+        qdrant_client.delete(
+            collection_name="video_segments",
+            points_selector=models.Filter(
+                must=[models.FieldCondition(key="video_id", match=models.MatchValue(value=video_id))]
+            )
+        )
+    except Exception as e:
+        print(f"[CANCEL] Error cleaning Qdrant for {video_id}: {e}")
+        
+    try:
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"[CANCEL] Deleted file: {file_path}")
+    except Exception as e:
+        print(f"[CANCEL] Error deleting file {file_path}: {e}")
 
 def bg_ingest_task(video_id: str, file_path: str):
     """Runs the heavy ML ingestion loop in a separate thread."""
-    active_ingestions[video_id] = {"last_message": "data: [0/4] Starting...\n\n", "done": False, "error": None}
+    active_ingestions[video_id] = {"last_message": "data: [0/4] Starting...\n\n", "done": False, "error": None, "canceled": False}
+    print(f"[INGEST] Starting background job for '{video_id}'...")
     try:
         ingestion_engine = get_ingestion_engine()
-        for msg in ingestion_engine.process_video_stream(file_path, video_id):
+        gen = ingestion_engine.process_media_stream(file_path, video_id)
+        is_canceled = False
+        
+        for msg in gen:
+            if video_id in active_ingestions and active_ingestions[video_id].get("canceled"):
+                is_canceled = True
+                break
+                
             if video_id in active_ingestions:
                 active_ingestions[video_id]["last_message"] = msg
+                # Log the progress string to the server terminal
+                clean_msg = msg.replace("data: ", "").strip()
+                if clean_msg:
+                    print(f"[INGEST '{video_id}'] {clean_msg}")
+                    
+        # Guarantee all file locks (cv2.VideoCapture) are dropped by closing the generator
+        gen.close()
+        
+        if is_canceled:
+            print(f"[INGEST] Job '{video_id}' was canceled by user.")
+            active_ingestions[video_id]["last_message"] = "data: [CANCELED] Ingestion aborted.\n\n"
+            active_ingestions[video_id]["done"] = True
+            cleanup_canceled_video(video_id, file_path)
+            return
+                    
         if video_id in active_ingestions:
+            print(f"[INGEST] Job '{video_id}' completed successfully.")
             active_ingestions[video_id]["done"] = True
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         if video_id in active_ingestions:
+            print(f"[INGEST] Job '{video_id}' failed: {e}")
             active_ingestions[video_id]["last_message"] = f"data: [ERROR] {str(e)}\n\n"
             active_ingestions[video_id]["error"] = str(e)
             active_ingestions[video_id]["done"] = True
@@ -204,6 +298,9 @@ def bg_ingest_task(video_id: str, file_path: str):
 @router.post("/api/ingest/start")
 def start_ingest_job(video_id: str, file_path: str, bg_tasks: BackgroundTasks):
     """Triggers the ingestion job in the background."""
+    import urllib.parse
+    file_path = urllib.parse.unquote(file_path)
+    
     if video_id not in active_ingestions or active_ingestions[video_id]["done"]:
         bg_tasks.add_task(bg_ingest_task, video_id, file_path)
     return {"success": True, "video_id": video_id}
@@ -213,6 +310,14 @@ def get_active_ingestions():
     """Returns a list of currently ingesting video IDs so the UI can re-attach on refresh."""
     active = [vid for vid, state in active_ingestions.items() if not state["done"]]
     return {"active_jobs": active}
+
+@router.post("/api/ingest/{video_id}/cancel")
+def cancel_ingest_job(video_id: str):
+    """Signals an active ingestion loop to break early."""
+    if video_id in active_ingestions:
+        active_ingestions[video_id]["canceled"] = True
+        return {"success": True}
+    return {"success": False, "error": "Not found or not active"}
 
 # --- INGEST STREAMING ENDPOINT ---
 @router.get("/ingest/{video_id}")
@@ -230,6 +335,9 @@ async def ingest_video_stream(video_id: str, file_path: str = None):
             if state["last_message"] != last_sent:
                 last_sent = state["last_message"]
                 yield last_sent
+            else:
+                # Keep-alive ping to prevent the connection from dropping (WinError 10054)
+                yield ": keepalive\n\n"
                 
             if state["done"]:
                 yield "data: [COMPLETE] Ingestion finished.\n\n"
@@ -259,14 +367,17 @@ def get_media_library():
 
     for root, dirs, files in os.walk(media_dir):
         for filename in files:
-            if filename.endswith(".mp4") or filename.endswith(".mkv"):
+            ext = filename.lower().split('.')[-1]
+            if ext in ["mp4", "mkv", "mp3", "wav", "m4a", "jpg", "jpeg", "png", "webp", "pdf"]:
                 raw_name = os.path.splitext(filename)[0]
                 clean_id = re.sub(r'\W+', '_', raw_name.lower()).strip('_')
                 
                 rel_path = os.path.relpath(os.path.join(root, filename), media_dir)
                 folder_name = os.path.dirname(rel_path).replace('\\', '/')
 
-                video_lib[clean_id] = f"/media/{rel_path.replace(os.sep, '/')}"
+                import urllib.parse
+                encoded_path = "/".join(urllib.parse.quote(p) for p in rel_path.replace(os.sep, '/').split('/'))
+                video_lib[clean_id] = f"/media/{encoded_path}"
                 title_lib[clean_id] = raw_name.replace("_", " ")
                 size_lib[clean_id] = os.path.getsize(os.path.join(root, filename))
                 folder_lib[clean_id] = folder_name
@@ -389,7 +500,7 @@ def chat_with_video(request: ChatRequest):
             records.extend(v_records)
 
         if not records:
-            yield "❌ *Error: No data found for the selected videos in the database.*\n\n"
+            yield "❌ *Error: No data found for the selected media in the database.*\n\n"
             return
 
         video_transcripts = {}
@@ -397,12 +508,37 @@ def chat_with_video(request: ChatRequest):
             vid = r.payload.get("video_id")
             video_transcripts.setdefault(vid, []).append(r)
             
-        full_transcript = ""
-        for vid, segs in video_transcripts.items():
-            segs.sort(key=lambda x: x.payload.get("start_timestamp", 0))
-            t_text = " ".join([s.payload.get("transcript", "") for s in segs])
-            full_transcript += f"\n\n--- Video: {vid} ---\n{t_text}"
-        full_transcript = full_transcript.strip()
+        media_lib = get_media_library()["videoLibrary"]
+        folder_lib = get_media_library()["folderLibrary"]
+
+        def format_transcript_data(v_transcripts, prefix=""):
+            res = prefix + "\n"
+            summaries = []
+            for i, (vid, segs) in enumerate(v_transcripts.items(), 1):
+                segs.sort(key=lambda x: x.payload.get("start_timestamp", 0))
+                t_text = " ".join([s.payload.get("transcript", "") for s in segs])
+                
+                ext = media_lib.get(vid, "").split('.')[-1].lower()
+                if ext == "pdf":
+                    ftype = "PDF Document"
+                elif ext in ["jpg", "jpeg", "png", "webp"]:
+                    ftype = "Image"
+                elif ext in ["mp3", "wav", "m4a"]:
+                    ftype = "Audio File"
+                elif ext in ["mp4", "mkv"]:
+                    ftype = "Video"
+                else:
+                    ftype = "Media"
+                    
+                folder_name = folder_lib.get(vid, "root")
+                if not folder_name or folder_name == ".":
+                    folder_name = "root"
+                    
+                res += f"\n\n--- [File {i}] Name: {vid} | Type: {ftype} | Folder: {folder_name} ---\n{t_text}"
+                summaries.append(f"{i}. {vid} ({ftype}) in folder '{folder_name}'")
+            return res.strip(), summaries
+
+        full_transcript, file_summaries = format_transcript_data(video_transcripts)
 
         # --- TRUE DYNAMIC RAG: CONTEXT LIMITING ---
         MAX_CHARS = 4000
@@ -468,12 +604,10 @@ def chat_with_video(request: ChatRequest):
                 vid = r.payload.get("video_id")
                 video_transcripts.setdefault(vid, []).append(r)
                 
-            full_transcript = "[NOTE: The video was long. Providing dynamically packed high-relevance snippets.]\n"
-            for vid, segs in video_transcripts.items():
-                segs.sort(key=lambda x: x.payload.get("start_timestamp", 0))
-                t_text = " ".join([s.payload.get("transcript", "") for s in segs])
-                full_transcript += f"\n\n--- Video: {vid} ---\n{t_text}"
-            full_transcript = full_transcript.strip()
+            full_transcript, file_summaries = format_transcript_data(
+                video_transcripts, 
+                prefix="[NOTE: The context was long. Providing dynamically packed high-relevance snippets.]"
+            )
             
             # --- THOUGHT PROCESS: STEP 3 ---
             yield f"✅ *Packed {len(valid_chunks)} highly relevant segments ({current_chars // 4} tokens). Generating answer...*\n\n---\n\n"
@@ -482,9 +616,18 @@ def chat_with_video(request: ChatRequest):
              yield f"✅ *Video is short. Loaded full transcript. Generating answer...*\n\n---\n\n"
 
         # 2. Build the System Prompt
-        system_instruction = f"""You are an AI Video Assistant. Based ONLY on the following video transcript, answer the user's question.
-        Transcript:
-        {full_transcript}"""
+        is_folder_context = len(request.target_video_ids) > 1
+        context_desc = "These files represent the contents of a folder." if is_folder_context else "This data represents the content of the user's currently selected file."
+        summary_instruction = "When summarizing the folder, explicitly list the files by number, name, and type, and explain their contents in detail." if is_folder_context else "Provide a detailed explanation of the file's content based on the extracted data."
+
+        system_instruction = f"""You are an AI Assistant. You have been provided with data extracted from the following file(s):
+{chr(10).join(file_summaries)}
+
+Based ONLY on the provided extracted data, answer the user's question. {context_desc}
+{summary_instruction}
+
+Extracted Data:
+{full_transcript}"""
         
         # 3. Format the chat history and stream the response
         provider = llm_settings.provider.lower()
@@ -513,6 +656,13 @@ def delete_video(video_id: str, delete_file: bool = Query(default=True)):
     Deletes all Qdrant vectors for a given video_id.
     If delete_file=True (default), also removes the media file from disk.
     """
+    # 0. If currently ingesting, gracefully cancel it to drop file locks
+    if video_id in active_ingestions and not active_ingestions[video_id]["done"]:
+        active_ingestions[video_id]["canceled"] = True
+        import time
+        # Give the generator a moment to cleanly release the cv2 file lock
+        time.sleep(1)
+
     qdrant_client = get_qdrant_client()
     
     # 1. Count points before deletion for the response

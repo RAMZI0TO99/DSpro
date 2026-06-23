@@ -33,7 +33,9 @@
                 <span class="badge badge-visual">👁 Visual</span>
                 <span class="badge badge-audio">🎙 Audio</span>
                 <span class="badge badge-lexical">🔤 Lexical</span>
-                <button id="settings-btn" class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-primary); border: 1px solid var(--border); cursor: pointer; margin-left: 10px; transition: var(--transition);">⚙️ Settings</button>
+                <button id="settings-btn" class="badge"
+                    style="background: rgba(255,255,255,0.05); color: var(--text-primary); border: 1px solid var(--border); cursor: pointer; margin-left: 10px; transition: var(--transition);">⚙️
+                    Settings</button>
             </div>
         </header>
 
@@ -56,8 +58,9 @@
                 </div>
 
                 <div id="upload-zone">
-                    <input type="file" id="video-upload" accept="video/mp4,video/mkv,.mkv" style="display:none;"
-                        multiple>
+                    <input type="file" id="video-upload"
+                        accept="video/mp4,video/mkv,.mkv,audio/mp3,audio/wav,audio/x-m4a,.mp3,.wav,.m4a,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,application/pdf,.pdf"
+                        style="display:none;" multiple>
                     <input type="file" id="folder-upload" webkitdirectory style="display:none;">
                     <div style="display: flex; gap: 8px; margin-bottom: 8px;">
                         <button class="upload-action-btn" onclick="document.getElementById('video-upload').click()">
@@ -73,7 +76,15 @@
                         <div class="phase-step" id="phase-3" title="Phase 3: Visual OCR"></div>
                         <div class="phase-step" id="phase-4" title="Phase 4: Vectorization"></div>
                     </div>
-                    <div id="ingest-status"></div>
+                    <div
+                        style="display:flex; justify-content:space-between; align-items:flex-start; margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-secondary);">
+                        <div id="ingest-filename" style="font-weight: 500; word-break: break-all; margin-right: 8px;">
+                        </div>
+                        <button id="cancel-ingest-btn" title="Cancel Ingestion"
+                            style="display:none; background:var(--danger); color:white; padding: 2px 6px; font-size: 0.7rem; border:none; border-radius: 4px; cursor: pointer; flex-shrink: 0;">🛑</button>
+                    </div>
+                    <div id="ingest-status"
+                        style="font-size: 0.85rem; margin-top: 0.25rem; color: var(--text-primary);"></div>
                 </div>
             </aside>
 
@@ -90,6 +101,11 @@
                     <video id="main-video" controls>
                         Your browser does not support the video tag.
                     </video>
+                    <img id="main-image"
+                        style="display:none; width:100%; height:100%; object-fit:contain; border-radius:var(--radius-lg);"
+                        alt="Selected Image">
+                    <iframe id="main-pdf"
+                        style="display:none; width:100%; height:100%; border:none; border-radius:var(--radius-lg);"></iframe>
                 </div>
 
                 <!-- Search Result Cards -->
@@ -109,7 +125,8 @@
                 <div class="pane-header">AI Assistant</div>
 
                 <div id="chat-history">
-                    <div class="message msg-ai">System online. Select a video from the library, then ask a question or search for a moment.</div>
+                    <div class="message msg-ai">System online. Select media from the library, then ask a question or
+                        search for something.</div>
                 </div>
 
                 <div id="chat-controls">
@@ -124,7 +141,10 @@
                     </div>
                     <div class="btn-row">
                         <button class="action-btn" id="chat-btn">🤖 Ask / Chat</button>
-                        <button class="action-btn" id="search-btn">🔍 Find Moment</button>
+                        <button class="action-btn" id="search-btn">🔍 Find</button>
+                        <button class="action-btn" id="cancel-btn"
+                            style="display:none; background:var(--bg-panel); color:var(--text-secondary); border: 1px solid var(--border);">🛑
+                            Cancel</button>
                     </div>
                     <div class="input-hint">Press Enter to Ask / Chat</div>
                 </div>
@@ -140,7 +160,8 @@
         <div id="modal-box">
             <h3 id="modal-title">🗑 Delete Video</h3>
             <p id="modal-message">Are you sure you want to delete this video?</p>
-            <select id="modal-folder-select" style="display:none; width:100%; margin-top:10px; padding:8px; border-radius:4px; background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); outline:none; font-family:'Inter', sans-serif; font-size:13px;"></select>
+            <select id="modal-folder-select"
+                style="display:none; width:100%; margin-top:10px; padding:8px; border-radius:4px; background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); outline:none; font-family:'Inter', sans-serif; font-size:13px;"></select>
             <input type="text" id="modal-input" style="display:none; width:100%; margin-top:10px; padding:8px;"
                 placeholder="New Folder Name">
             <div class="modal-actions">
@@ -153,12 +174,16 @@
     <!-- ================================================================
          SETTINGS MODAL
     ================================================================ -->
-    <div id="settings-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:9999; align-items:center; justify-content:center;">
-        <div id="settings-box" style="background:var(--bg-panel); border:1px solid var(--border); border-radius:var(--radius-lg); padding:24px; width:400px; box-shadow:var(--shadow-lg);">
+    <div id="settings-overlay"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:9999; align-items:center; justify-content:center;">
+        <div id="settings-box"
+            style="background:var(--bg-panel); border:1px solid var(--border); border-radius:var(--radius-lg); padding:24px; width:400px; box-shadow:var(--shadow-lg);">
             <h3 style="margin-bottom:16px;">⚙️ LLM Settings</h3>
-            
-            <label style="display:block; margin-bottom:6px; font-weight:600; font-size:12px; color:var(--text-secondary);">Provider</label>
-            <select id="settings-provider" style="width:100%; padding:8px; border-radius:4px; background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); margin-bottom:16px; outline:none; font-family:'Inter', sans-serif; font-size:13px;">
+
+            <label
+                style="display:block; margin-bottom:6px; font-weight:600; font-size:12px; color:var(--text-secondary);">Provider</label>
+            <select id="settings-provider"
+                style="width:100%; padding:8px; border-radius:4px; background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); margin-bottom:16px; outline:none; font-family:'Inter', sans-serif; font-size:13px;">
                 <option value="local">LM Studio (Local)</option>
                 <option value="ollama">Ollama (Local)</option>
                 <option value="custom">Custom API (OpenAI Compatible)</option>
@@ -167,29 +192,40 @@
             </select>
 
             <div id="settings-baseurl-container" style="margin-bottom:16px;">
-                <label style="display:block; margin-bottom:6px; font-weight:600; font-size:12px; color:var(--text-secondary);">Base URL</label>
-                <input type="text" id="settings-baseurl" style="width:100%; padding:8px; border-radius:4px; background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); outline:none; font-family:'Inter', sans-serif; font-size:13px;">
+                <label
+                    style="display:block; margin-bottom:6px; font-weight:600; font-size:12px; color:var(--text-secondary);">Base
+                    URL</label>
+                <input type="text" id="settings-baseurl"
+                    style="width:100%; padding:8px; border-radius:4px; background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); outline:none; font-family:'Inter', sans-serif; font-size:13px;">
             </div>
 
             <div id="settings-model-container" style="margin-bottom:16px;">
-                <label style="display:block; margin-bottom:6px; font-weight:600; font-size:12px; color:var(--text-secondary);">Model Name</label>
-                <input type="text" id="settings-model" style="width:100%; padding:8px; border-radius:4px; background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); outline:none; font-family:'Inter', sans-serif; font-size:13px;">
+                <label
+                    style="display:block; margin-bottom:6px; font-weight:600; font-size:12px; color:var(--text-secondary);">Model
+                    Name</label>
+                <input type="text" id="settings-model"
+                    style="width:100%; padding:8px; border-radius:4px; background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); outline:none; font-family:'Inter', sans-serif; font-size:13px;">
             </div>
 
             <div id="settings-apikey-container" style="margin-bottom:16px; display:none;">
-                <label style="display:block; margin-bottom:6px; font-weight:600; font-size:12px; color:var(--text-secondary);">API Key</label>
-                <input type="password" id="settings-apikey" style="width:100%; padding:8px; border-radius:4px; background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); outline:none; font-family:'Inter', sans-serif; font-size:13px;">
+                <label
+                    style="display:block; margin-bottom:6px; font-weight:600; font-size:12px; color:var(--text-secondary);">API
+                    Key</label>
+                <input type="password" id="settings-apikey"
+                    style="width:100%; padding:8px; border-radius:4px; background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); outline:none; font-family:'Inter', sans-serif; font-size:13px;">
             </div>
 
             <div class="modal-actions" style="margin-top:24px;">
-                <button class="modal-btn" id="settings-cancel" style="background:var(--bg-base); color:var(--text-secondary); border:1px solid var(--border);">Cancel</button>
-                <button class="modal-btn" id="settings-save" style="background:var(--accent); color:white; border:none;">Save & Reload</button>
+                <button class="modal-btn" id="settings-cancel"
+                    style="background:var(--bg-base); color:var(--text-secondary); border:1px solid var(--border);">Cancel</button>
+                <button class="modal-btn" id="settings-save"
+                    style="background:var(--accent); color:white; border:none;">Save & Reload</button>
             </div>
         </div>
     </div>
 
 
-    <script src="/js/app.js"></script>
+    <script src="/js/app.js?v=2"></script>
 </body>
 
 </html>

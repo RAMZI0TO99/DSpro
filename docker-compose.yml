@@ -5,14 +5,15 @@ services:
     image: qdrant/qdrant:latest
     container_name: dspro_qdrant
     ports:
-      - "6333:6333"   # REST API
-      - "6334:6334"   # gRPC
+      - "6333:6333" # REST API
+      - "6334:6334" # gRPC
     volumes:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
 
   # ── FastAPI Backend ───────────────────────────────────────────────────
   backend:
+    image: dspro_backend:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -23,23 +24,30 @@ services:
       - .env
     environment:
       - QDRANT_URL=http://qdrant:6333
-      # Cache settings - use cached models FIRST before downloading
-      - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface
+
+      # ── Model cache paths (point to baked-in image directories) ──────
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
       - TORCH_HOME=/root/.cache/torch
       - EASYOCR_HOME=/root/.EasyOCR
-      - HF_HOME=/root/.cache/huggingface
+      - FASTEMBED_CACHE_PATH=/root/.local/share/fastembed
+      - NLTK_DATA=/root/nltk_data
       - HF_HUB_LOCAL_FILES_ONLY=1
+
+      # ── LLM Configuration (change these to switch your LLM provider) ─
+      # Provider: local | ollama | gemini | openai | custom
+      - LLM_PROVIDER=local
+      # Base URL for local LM Studio or Ollama (use host.docker.internal to reach host PC)
+      - LLM_BASE_URL=http://host.docker.internal:1234/v1
+      # Model name as it appears in your LM Studio / Ollama model list
+      - LLM_MODEL=Llama-3.2-3B-Instruct-Q4_K_M
+
     volumes:
-      # Application & media
+      # Application media (user uploads)
       - ./media:/app/media
-      - clip_cache:/root/.cache/clip
-      - huggingface_cache:/root/.cache/huggingface
-      - torch_cache:/root/.cache/torch
-      - easyocr_cache:/root/.EasyOCR
-      - fastembed_cache:/root/.local/share/fastembed
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -55,19 +63,9 @@ services:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [gpu]
+              capabilities: [ gpu ]
 
-# ── Named Volumes (persist models across restarts) ─────────────────────
+# ── Named Volumes ─────────────────────────────────────────────────────
 volumes:
   qdrant_data:
-    driver: local
-  huggingface_cache:
-    driver: local
-  torch_cache:
-    driver: local
-  easyocr_cache:
-    driver: local
-  fastembed_cache:
-    driver: local
-  clip_cache:
     driver: local

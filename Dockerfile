@@ -35,18 +35,29 @@ RUN pip install --no-deps \
 RUN python -m nltk.downloader -d /root/nltk_data punkt_tab
 
 # ── 7. Set cache directories BEFORE downloading models ────
-ENV HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface
+ENV HF_HOME=/root/.cache/huggingface
+ENV HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
 ENV TORCH_HOME=/root/.cache/torch
 ENV EASYOCR_HOME=/root/.EasyOCR
-ENV HF_HOME=/root/.cache/huggingface
+ENV FASTEMBED_CACHE_PATH=/root/.local/share/fastembed
+ENV NLTK_DATA=/root/nltk_data
 # NOTE: This is 0 during BUILD to allow pip/nltk to work normally.
 # docker-compose.yml overrides this to 1 at RUNTIME to enforce strict offline mode.
 ENV HF_HUB_LOCAL_FILES_ONLY=0
 
-# ── 8. Prepare Cache Directories ───────────────────────────────
-# We rely on persistent Docker Volumes (defined in docker-compose.yml) 
-# to cache models. The container will download them on first boot.
+# ── 8. Bake ML Models directly into Image ────────────────────
+# We manually copy the downloaded models from the host into the Docker image.
+# This makes the final image large (~10GB) but 100% offline-ready!
+
 RUN mkdir -p /root/.cache/huggingface /root/.cache/torch /root/.EasyOCR /root/.local/share/fastembed /root/.cache/clip
+
+COPY models/huggingface* /root/.cache/huggingface/
+COPY models/torch* /root/.cache/torch/
+COPY models/easyocr* /root/.EasyOCR/
+COPY models/fastembed* /root/.local/share/fastembed/
+COPY models/clip* /root/.cache/clip/
+
+RUN echo "✓ All models successfully baked into the image from the host."
 
 # ── 9. Copy application source ─────────────────────────────
 # We explicitly copy only the application source code folders so we don't 
