@@ -415,13 +415,13 @@ async function handleSearch() {
                 const ext = videoLibrary[best.video_id].split('.').pop().toLowerCase();
                 if (ext === "pdf") {
                     const mainPdf = document.getElementById('main-pdf');
-                    mainPdf.src = videoLibrary[best.video_id] + "#page=" + Math.floor(best.start_timestamp);
+                    mainPdf.src = videoLibrary[best.video_id] + "#page=" + Math.floor(best.start_timestamp) + "&search=" + encodeURIComponent(best.llm_optimized_query);
                 } else if (!["jpg", "jpeg", "png", "webp"].includes(ext)) {
                     videoPlayer.onloadedmetadata = () => {
-                        videoPlayer.currentTime = best.start_timestamp;
+                        videoPlayer.currentTime = Math.max(0, best.start_timestamp - 1);
                         videoPlayer.play().catch(e => console.log("Play error:", e));
                     };
-                    videoPlayer.currentTime = best.start_timestamp;
+                    videoPlayer.currentTime = Math.max(0, best.start_timestamp - 1);
                     videoPlayer.play().catch(e => console.log("Play error:", e));
                 }
             }
@@ -479,13 +479,13 @@ function renderResultCards(results) {
             const ext = videoLibrary[r.video_id].split('.').pop().toLowerCase();
             if (ext === "pdf") {
                 const mainPdf = document.getElementById('main-pdf');
-                mainPdf.src = videoLibrary[r.video_id] + "#page=" + Math.floor(r.start_timestamp);
+                mainPdf.src = videoLibrary[r.video_id] + "#page=" + Math.floor(r.start_timestamp) + "&search=" + encodeURIComponent(r.llm_optimized_query);
             } else if (!["jpg", "jpeg", "png", "webp"].includes(ext)) {
                 videoPlayer.onloadedmetadata = () => {
-                    videoPlayer.currentTime = r.start_timestamp;
+                    videoPlayer.currentTime = Math.max(0, r.start_timestamp - 1);
                     videoPlayer.play().catch(e => console.log("Play error:", e));
                 };
-                videoPlayer.currentTime = r.start_timestamp;
+                videoPlayer.currentTime = Math.max(0, r.start_timestamp - 1);
                 videoPlayer.play().catch(e => console.log("Play error:", e));
             }
         });

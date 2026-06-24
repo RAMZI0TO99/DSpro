@@ -26,13 +26,14 @@ services:
       - QDRANT_URL=http://qdrant:6333
 
       # ── Model cache paths (point to baked-in image directories) ──────
-      - HF_HOME=/root/.cache/huggingface
-      - HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
-      - TORCH_HOME=/root/.cache/torch
-      - EASYOCR_HOME=/root/.EasyOCR
-      - FASTEMBED_CACHE_PATH=/root/.local/share/fastembed
+      - HF_HOME=/app/models/huggingface
+      - HUGGINGFACE_HUB_CACHE=/app/models/huggingface/hub
+      - TORCH_HOME=/app/models/torch
+      - EASYOCR_HOME=/app/models/easyocr
+      - FASTEMBED_CACHE_PATH=/app/models/fastembed
       - NLTK_DATA=/root/nltk_data
       - HF_HUB_LOCAL_FILES_ONLY=1
+      - HF_HUB_OFFLINE=1
 
       # ── LLM Configuration (change these to switch your LLM provider) ─
       # Provider: local | ollama | gemini | openai | custom
@@ -44,7 +45,7 @@ services:
 
     volumes:
       # Application media (user uploads)
-      - ./media:/app/media
+      - media_data:/app/media
 
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/" ]
@@ -68,4 +69,6 @@ services:
 # ── Named Volumes ─────────────────────────────────────────────────────
 volumes:
   qdrant_data:
+    driver: local
+  media_data:
     driver: local

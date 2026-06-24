@@ -14,7 +14,7 @@ import numpy as np
 
 
 class LocalHotIngestionPipeline:
-    def __init__(self, clip_model, clip_tokenizer, clip_transform, db_client):
+    def __init__(self, clip_model, clip_tokenizer, clip_transform, dense_text_model, db_client):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"\n[BOOT-INGESTION] Initializing Local Hot Ingestion on {self.device}...")
 
@@ -22,6 +22,7 @@ class LocalHotIngestionPipeline:
         self._ensure_collection_exists()
 
         self.bm25_model = SparseTextEmbedding(model_name="Qdrant/bm25")
+        self.dense_text_model = dense_text_model
 
         self.clip_model = clip_model
         self.clip_tokenizer = clip_tokenizer
@@ -83,7 +84,7 @@ class LocalHotIngestionPipeline:
                 collection_name=collection_name,
                 vectors_config={
                     "visual": models.VectorParams(size=768, distance=models.Distance.COSINE),
-                    "audio": models.VectorParams(size=768, distance=models.Distance.COSINE),
+                    "audio": models.VectorParams(size=384, distance=models.Distance.COSINE),
                 },
                 sparse_vectors_config={
                     "text_sparse": models.SparseVectorParams(modifier=models.Modifier.IDF)
@@ -148,16 +149,14 @@ class LocalHotIngestionPipeline:
         yield f"data: [3/4] Generating semantic & lexical embeddings...\n\n"
         # 3. Audio/Text Semantic + Lexical
         if transcript:
-            with torch.no_grad():
-                txt_in = self.clip_tokenizer([transcript[:200]]).to(self.device)
-                aud_vec = self.clip_model.encode_text(txt_in).cpu()[0].tolist()
+            aud_vec = list(self.dense_text_model.embed([transcript]))[0].tolist()
             sparse_res = list(self.bm25_model.embed([transcript]))[0]
             sparse_vec = models.SparseVector(
                 indices=sparse_res.indices.tolist(),
                 values=sparse_res.values.tolist()
             )
         else:
-            aud_vec = [0.0] * 768
+            aud_vec = [0.0] * 384
             sparse_vec = models.SparseVector(indices=[], values=[])
 
         yield f"data: [4/4] Upserting image point to Qdrant...\n\n"
@@ -205,9 +204,7 @@ class LocalHotIngestionPipeline:
             text = segment.get("text", "").strip()
             if not text: continue
             
-            with torch.no_grad():
-                txt_in = self.clip_tokenizer([text[:200]]).to(self.device)
-                aud_vec = self.clip_model.encode_text(txt_in).cpu()[0].tolist()
+            aud_vec = list(self.dense_text_model.embed([text]))[0].tolist()
             
             sparse_res = list(self.bm25_model.embed([text]))[0]
             sparse_vec = models.SparseVector(
@@ -274,16 +271,14 @@ class LocalHotIngestionPipeline:
                 
             # Embed Audio/Text Semantic + Lexical
             if transcript:
-                with torch.no_grad():
-                    txt_in = self.clip_tokenizer([transcript[:200]]).to(self.device)
-                    aud_vec = self.clip_model.encode_text(txt_in).cpu()[0].tolist()
+                aud_vec = list(self.dense_text_model.embed([transcript]))[0].tolist()
                 sparse_res = list(self.bm25_model.embed([transcript]))[0]
                 sparse_vec = models.SparseVector(
                     indices=sparse_res.indices.tolist(),
                     values=sparse_res.values.tolist()
                 )
             else:
-                aud_vec = [0.0] * 768
+                aud_vec = [0.0] * 384
                 sparse_vec = models.SparseVector(indices=[], values=[])
 
             # Upsert Point (Use page_num + 1 for user-facing 1-indexed page numbers)
@@ -445,18 +440,14 @@ class LocalHotIngestionPipeline:
                 transcript = f"{' '.join(speech)} {scene_ocr_data.get(idx, '')}".strip()
 
                 if transcript:
-                    with torch.no_grad():
-                        # FIX 4: Increased truncation from 70 → 200 chars.
-                        # CLIP tokenizer handles the hard 77-token limit internally.
-                        txt_in = self.clip_tokenizer([transcript[:200]]).to(self.device)
-                        aud_vec = self.clip_model.encode_text(txt_in).cpu()[0].tolist()
+                    aud_vec = list(self.dense_text_model.embed([transcript]))[0].tolist()
                     sparse_res = list(self.bm25_model.embed([transcript]))[0]
                     sparse_vec = models.SparseVector(
                         indices=sparse_res.indices.tolist(),
                         values=sparse_res.values.tolist()
                     )
                 else:
-                    aud_vec = [0.0] * 768
+                    aud_vec = [0.0] * 384
                     sparse_vec = models.SparseVector(indices=[], values=[])
 
                 points_to_upsert.append(

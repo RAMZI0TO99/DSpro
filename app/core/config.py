@@ -16,12 +16,8 @@ class LLMSettings(BaseModel):
     api_key: str = ""
 
 def load_settings() -> LLMSettings:
-    # When running inside Docker, QDRANT_URL is always set.
-    # In that case, skip settings.json entirely and use env vars so
-    # docker-compose.yml is the single source of truth for configuration.
-    is_docker = bool(os.getenv("QDRANT_URL"))
-
-    if not is_docker and os.path.exists(SETTINGS_FILE):
+    # First, try to load from settings.json (created by the UI dynamically)
+    if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)

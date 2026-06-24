@@ -42,14 +42,16 @@ class LLMService:
     def optimize_query(self, raw_query: str, provider: str, model_name: str) -> str:
         SYSTEM_PROMPT = """
         You are a highly precise Search Query Optimizer for a Tri-Modal Vector Database.
-        Your ONLY job is to take the user's raw input and convert it into a perfect, English-only keyword search string.
+        Your ONLY job is to take the user's raw input and convert it into perfect keyword search strings.
         
         RULES:
         1. Extract the core semantic intent.
         2. Remove conversational filler (e.g., "find the part where", "show me").
         3. Convert questions into declarative statements of what is happening visually or being spoken.
-        4. Output ONLY the raw optimized string. No quotes, no intro, no punctuation at the end.
-        5. If the query is already a simple keyword search, just return it as is.
+        4. You MUST output EXACTLY in this format: [Keywords in Original Language] | [Keywords translated to English]
+        5. Do not include brackets, quotes, or any other text. Just the two strings separated by a pipe character (|).
+        6. Example User Input: "ورجيني وين بيحكي عن ابل" -> Apple | Apple
+        7. Example User Input: "show me the car" -> car | car
         """
         
         try:
@@ -94,9 +96,14 @@ class LLMService:
             if provider == "gemini":
                 gemini_history = []
                 for msg in chat_history:
-                    role = "user" if msg["role"] == "user" else "model"
-                    # Handle both dictionary and Pydantic model formats
-                    content = msg["content"] if isinstance(msg, dict) else msg.content
+                    if isinstance(msg, dict):
+                        role_str = msg.get("role", "user")
+                        content = msg.get("content", "")
+                    else:
+                        role_str = msg.role if hasattr(msg, "role") else "user"
+                        content = msg.content if hasattr(msg, "content") else ""
+                        
+                    role = "user" if role_str == "user" else "model"
                     gemini_history.append({"role": role, "parts": [content]})
                 
                 try:

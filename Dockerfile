@@ -35,37 +35,22 @@ RUN pip install --no-deps \
 RUN python -m nltk.downloader -d /root/nltk_data punkt_tab
 
 # ── 7. Set cache directories BEFORE downloading models ────
-ENV HF_HOME=/root/.cache/huggingface
-ENV HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
-ENV TORCH_HOME=/root/.cache/torch
-ENV EASYOCR_HOME=/root/.EasyOCR
-ENV FASTEMBED_CACHE_PATH=/root/.local/share/fastembed
+ENV HF_HOME=/app/models/huggingface
+ENV HUGGINGFACE_HUB_CACHE=/app/models/huggingface/hub
+ENV TORCH_HOME=/app/models/torch
+ENV EASYOCR_HOME=/app/models/easyocr
+ENV FASTEMBED_CACHE_PATH=/app/models/fastembed
 ENV NLTK_DATA=/root/nltk_data
 # NOTE: This is 0 during BUILD to allow pip/nltk to work normally.
 # docker-compose.yml overrides this to 1 at RUNTIME to enforce strict offline mode.
 ENV HF_HUB_LOCAL_FILES_ONLY=0
 
-# ── 8. Bake ML Models directly into Image ────────────────────
-# We manually copy the downloaded models from the host into the Docker image.
-# This makes the final image large (~10GB) but 100% offline-ready!
+# ── 8. Copy application source and models ─────────────────────────────
+# Because .dockerignore is perfectly configured, this safely copies the app code, 
+# Frontend, and the entire 10GB models/ folder into the image in one step!
+COPY . .
 
-RUN mkdir -p /root/.cache/huggingface /root/.cache/torch /root/.EasyOCR /root/.local/share/fastembed /root/.cache/clip
-
-COPY models/huggingface* /root/.cache/huggingface/
-COPY models/torch* /root/.cache/torch/
-COPY models/easyocr* /root/.EasyOCR/
-COPY models/fastembed* /root/.local/share/fastembed/
-COPY models/clip* /root/.cache/clip/
-
-RUN echo "✓ All models successfully baked into the image from the host."
-
-# ── 9. Copy application source ─────────────────────────────
-# We explicitly copy only the application source code folders so we don't 
-# accidentally duplicate the massive 10GB models/ folder into /app!
-COPY app ./app
-COPY Frontend ./Frontend
-COPY ingestion.py .
-COPY main.py .
+RUN echo "✓ Source code and all models successfully baked into the image from the host."
 
 # ── 10. Expose FastAPI port ──────────────────────────────────
 EXPOSE 8000

@@ -42,6 +42,10 @@ def get_ingestion_engine():
     _ensure_models_loaded()
     return vector_search.ingestion_engine
 
+def get_dense_text_model():
+    _ensure_models_loaded()
+    return vector_search.dense_text_model
+
 router = APIRouter()
 
 # --- Upload limits ---
@@ -396,69 +400,92 @@ def get_media_library():
 @router.post("/search")
 def search_video(request: SearchRequest):
     """Tri-modal hybrid search using CLIP visual + CLIP audio-text + BM25, fused with RRF."""
-    _ensure_models_loaded()
-    
-    clip_model = get_clip_model()
-    clip_tokenizer = get_clip_tokenizer()
-    bm25_model = get_bm25_model()
-    device = get_device()
-    qdrant_client = get_qdrant_client()
-    
-    # 1. Intercept and Optimize with LLM
-    optimized_query = llm_service.optimize_query(request.query, llm_settings.provider, llm_settings.model)
-
-    # 2. Generate Dense Semantic Vector (CLIP)
-    with torch.no_grad():
-        text_input = clip_tokenizer([optimized_query]).to(device)
-        dense_tensor = clip_model.encode_text(text_input)
-        dense_tensor /= dense_tensor.norm(dim=-1, keepdim=True)
-        dense_vector = dense_tensor.tolist()[0]
-
-    # 3. Generate Sparse Lexical Vector (BM25)
-    sparse_result = list(bm25_model.embed([optimized_query]))[0]
-    sparse_vector = models.SparseVector(
-        indices=sparse_result.indices.tolist(),
-        values=sparse_result.values.tolist()
-    )
-
-    # 4. Tri-Modal Hybrid Search with RRF fusion
-    search_results = qdrant_client.query_points(
-        collection_name="video_segments",
-        prefetch=[
-            models.Prefetch(query=dense_vector, using="visual", limit=20),
-            models.Prefetch(query=dense_vector, using="audio", limit=20),
-            models.Prefetch(query=sparse_vector, using="text_sparse", limit=20),
-        ],
-        query=models.FusionQuery(fusion=models.Fusion.RRF),
-        limit=request.top_k
-    )
-
-    output = []
-    THRESHOLD = 0.3  # Confidence threshold (30%) to prevent weak matches
-
-    for point in search_results.points:
-        capped_score = min(point.score, 1.0)
+    try:
+        _ensure_models_loaded()
         
-        if capped_score < THRESHOLD:
-            continue
+        clip_model = get_clip_model()
+        clip_tokenizer = get_clip_tokenizer()
+        bm25_model = get_bm25_model()
+        dense_text_model = get_dense_text_model()
+        device = get_device()
+        qdrant_client = get_qdrant_client()
+        
+        # 1. Intercept and Optimize with LLM
+        optimized_query_raw = llm_service.optimize_query(request.query, llm_settings.provider, llm_settings.model)
+        if "|" in optimized_query_raw:
+            parts = optimized_query_raw.split("|")
+            query_original = parts[0].strip()
+            query_english = parts[1].strip()
+        else:
+            query_original = optimized_query_raw.strip()
+            query_english = optimized_query_raw.strip()
 
-        transcript = point.payload.get("transcript", "")
-        # Return up to 500 chars for the result detail card
-        snippet = (transcript[:500] + "...") if len(transcript) > 500 else transcript
+        # 2. Generate Dense Semantic Vector (CLIP - English Only)
+        with torch.no_grad():
+            text_input = clip_tokenizer([query_english]).to(device)
+            dense_tensor = clip_model.encode_text(text_input)
+            dense_tensor /= dense_tensor.norm(dim=-1, keepdim=True)
+            dense_vector = dense_tensor.tolist()[0]
 
-        output.append({
-            "video_id": point.payload.get("video_id"),
-            "start_timestamp": point.payload.get("start_timestamp"),
-            "end_timestamp": point.payload.get("end_timestamp"),
-            "matched_transcript": snippet,
-            "hybrid_rrf_score": round(capped_score, 4),
-            "llm_optimized_query": optimized_query
-        })
+        # 3. Generate Sparse Lexical Vector (BM25 - Original Language)
+        sparse_result = list(bm25_model.embed([query_original]))[0]
+        sparse_vector = models.SparseVector(
+            indices=sparse_result.indices.tolist(),
+            values=sparse_result.values.tolist()
+        )
 
-    if not output:
-        return {"results": [], "message": "Out of domain query. No relevant video segments found."}
+        # 3b. Generate Multilingual Dense Text Vector (Original Language)
+        multilingual_dense_vector = list(dense_text_model.embed([query_original]))[0].tolist()
 
-    return {"results": output}
+        # 4. Tri-Modal Hybrid Search (Sequential searches to preserve absolute scores)
+        visual_res = qdrant_client.query_points(collection_name="video_segments", query=dense_vector, using="visual", limit=request.top_k, with_payload=True).points
+        audio_res = qdrant_client.query_points(collection_name="video_segments", query=multilingual_dense_vector, using="audio", limit=request.top_k, with_payload=True).points
+        sparse_res = qdrant_client.query_points(collection_name="video_segments", query=sparse_vector, using="text_sparse", limit=request.top_k, with_payload=True).points
+        
+        batch_res = [visual_res, audio_res, sparse_res]
+        
+        merged = {}
+        for res_list in batch_res:
+            for r in res_list:
+                if r.id not in merged:
+                    # BM25 scores can be > 1.0, cap them
+                    r.score = min(r.score, 1.0)
+                    merged[r.id] = r
+                else:
+                    merged[r.id].score = max(merged[r.id].score, min(r.score, 1.0))
+                    
+        # Sort by absolute score
+        final_points = sorted(merged.values(), key=lambda x: x.score, reverse=True)[:request.top_k]
+
+        output = []
+        THRESHOLD = 0.3  # Confidence threshold (30%) to prevent weak matches
+
+        for point in final_points:
+            capped_score = min(point.score, 1.0)
+            
+            if capped_score < THRESHOLD:
+                continue
+
+            transcript = point.payload.get("transcript", "")
+            # Return up to 500 chars for the result detail card
+            snippet = (transcript[:500] + "...") if len(transcript) > 500 else transcript
+
+            output.append({
+                "video_id": point.payload.get("video_id"),
+                "start_timestamp": point.payload.get("start_timestamp"),
+                "end_timestamp": point.payload.get("end_timestamp"),
+                "matched_transcript": snippet,
+                "hybrid_rrf_score": round(capped_score, 4),
+                "llm_optimized_query": query_original
+            })
+
+        if not output:
+            return {"results": [], "message": "Out of domain query. No relevant video segments found."}
+
+        return {"results": output}
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
 
 
 # =====================================================================
@@ -546,22 +573,32 @@ def chat_with_video(request: ChatRequest):
         
         if len(full_transcript) > MAX_CHARS:
             # We must use Semantic Search because the video is long
-            optimized_query = llm_service.optimize_query(request.query, llm_settings.provider, llm_settings.model)
+            optimized_query_raw = llm_service.optimize_query(request.query, llm_settings.provider, llm_settings.model)
+            if "|" in optimized_query_raw:
+                parts = optimized_query_raw.split("|")
+                query_original = parts[0].strip()
+                query_english = parts[1].strip()
+            else:
+                query_original = optimized_query_raw.strip()
+                query_english = optimized_query_raw.strip()
             
             # --- THOUGHT PROCESS: STEP 2 ---
             yield "🔎 *Scanning vector database...*\n\n"
             
             with torch.no_grad():
-                text_input = clip_tokenizer([optimized_query]).to(device)
+                text_input = clip_tokenizer([query_english]).to(device)
                 dense_tensor = clip_model.encode_text(text_input)
                 dense_tensor /= dense_tensor.norm(dim=-1, keepdim=True)
                 dense_vector = dense_tensor.tolist()[0]
                 
-            sparse_result = list(bm25_model.embed([optimized_query]))[0]
+            sparse_result = list(bm25_model.embed([query_original]))[0]
             sparse_vector = models.SparseVector(
                 indices=sparse_result.indices.tolist(),
                 values=sparse_result.values.tolist()
             )
+            
+            dense_text_model = get_dense_text_model()
+            multilingual_dense_vector = list(dense_text_model.embed([query_original]))[0].tolist()
             
             video_filter = models.Filter(must=[
                 models.FieldCondition(
@@ -570,23 +607,29 @@ def chat_with_video(request: ChatRequest):
                 )
             ])
 
-            # Retrieve a large pool (50 chunks) to filter down
-            search_results = qdrant_client.query_points(
-                collection_name="video_segments",
-                prefetch=[
-                    models.Prefetch(query=dense_vector, using="visual", limit=50, filter=video_filter),
-                    models.Prefetch(query=dense_vector, using="audio", limit=50, filter=video_filter),
-                    models.Prefetch(query=sparse_vector, using="text_sparse", limit=50, filter=video_filter),
-                ],
-                query=models.FusionQuery(fusion=models.Fusion.RRF),
-                limit=50
-            )
+            # Retrieve a large pool (50 chunks) to filter down (Sequential to preserve absolute scores)
+            visual_res = qdrant_client.query_points(collection_name="video_segments", query=dense_vector, using="visual", query_filter=video_filter, limit=50, with_payload=True).points
+            audio_res = qdrant_client.query_points(collection_name="video_segments", query=multilingual_dense_vector, using="audio", query_filter=video_filter, limit=50, with_payload=True).points
+            sparse_res = qdrant_client.query_points(collection_name="video_segments", query=sparse_vector, using="text_sparse", query_filter=video_filter, limit=50, with_payload=True).points
+            
+            batch_res = [visual_res, audio_res, sparse_res]
+            
+            merged = {}
+            for res_list in batch_res:
+                for r in res_list:
+                    if r.id not in merged:
+                        r.score = min(r.score, 1.0)
+                        merged[r.id] = r
+                    else:
+                        merged[r.id].score = max(merged[r.id].score, min(r.score, 1.0))
+                        
+            final_points = sorted(merged.values(), key=lambda x: x.score, reverse=True)[:50]
             
             # Filter and dynamically pack chunks
             valid_chunks = []
             current_chars = 0
             
-            for r in search_results.points:
+            for r in final_points:
                 score = min(r.score, 1.0)  # Cap score to 1.0 for consistency
                 if score < 0.3:
                     continue # Skip low relevance chunks
@@ -617,14 +660,14 @@ def chat_with_video(request: ChatRequest):
 
         # 2. Build the System Prompt
         is_folder_context = len(request.target_video_ids) > 1
-        context_desc = "These files represent the contents of a folder." if is_folder_context else "This data represents the content of the user's currently selected file."
-        summary_instruction = "When summarizing the folder, explicitly list the files by number, name, and type, and explain their contents in detail." if is_folder_context else "Provide a detailed explanation of the file's content based on the extracted data."
+        context_desc = "The user is asking about the contents of a folder with multiple files." if is_folder_context else "The user is asking about a specific file."
 
-        system_instruction = f"""You are an AI Assistant. You have been provided with data extracted from the following file(s):
+        system_instruction = f"""You are a helpful AI Assistant. You are provided with data extracted from the following file(s):
 {chr(10).join(file_summaries)}
 
-Based ONLY on the provided extracted data, answer the user's question. {context_desc}
-{summary_instruction}
+{context_desc}
+Based ONLY on the provided extracted data, answer the user's question. 
+Keep your response conversational, concise, and direct. Do NOT provide a long detailed breakdown of the entire file unless the user explicitly asks for a summary.
 
 Extracted Data:
 {full_transcript}"""
@@ -665,31 +708,34 @@ def delete_video(video_id: str, delete_file: bool = Query(default=True)):
 
     qdrant_client = get_qdrant_client()
     
-    # 1. Count points before deletion for the response
-    count_result = qdrant_client.count(
-        collection_name="video_segments",
-        count_filter=models.Filter(must=[
-            models.FieldCondition(
-                key="video_id",
-                match=models.MatchValue(value=video_id)
-            )
-        ]),
-        exact=True
-    )
-    vectors_deleted = count_result.count
-
-    # 2. Delete from Qdrant
-    qdrant_client.delete(
-        collection_name="video_segments",
-        points_selector=models.FilterSelector(
-            filter=models.Filter(must=[
+    # 1. Count points and delete from Qdrant if collection exists
+    vectors_deleted = 0
+    try:
+        count_result = qdrant_client.count(
+            collection_name="video_segments",
+            count_filter=models.Filter(must=[
                 models.FieldCondition(
                     key="video_id",
                     match=models.MatchValue(value=video_id)
                 )
-            ])
+            ]),
+            exact=True
         )
-    )
+        vectors_deleted = count_result.count
+
+        qdrant_client.delete(
+            collection_name="video_segments",
+            points_selector=models.FilterSelector(
+                filter=models.Filter(must=[
+                    models.FieldCondition(
+                        key="video_id",
+                        match=models.MatchValue(value=video_id)
+                    )
+                ])
+            )
+        )
+    except Exception as e:
+        print(f"[DELETE] Skipping Qdrant deletion (collection may not exist yet): {e}")
 
     # 3. Optionally delete the media file from disk
     file_deleted = False

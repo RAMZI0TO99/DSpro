@@ -2,7 +2,7 @@ import os
 import threading
 import torch
 import open_clip
-from fastembed import SparseTextEmbedding
+from fastembed import SparseTextEmbedding, TextEmbedding
 from qdrant_client import QdrantClient
 
 # --- Qdrant Initialization (fast) ---
@@ -22,13 +22,14 @@ clip_model = None
 clip_tokenizer = None
 clip_transform = None
 bm25_model = None
+dense_text_model = None
 ingestion_engine = None
 
 _model_lock = threading.Lock()
 
 def _load_models():
     """Lazy-load ML models on first request. Thread-safe."""
-    global clip_model, clip_tokenizer, clip_transform, bm25_model, ingestion_engine
+    global clip_model, clip_tokenizer, clip_transform, bm25_model, dense_text_model, ingestion_engine
 
     if clip_model is not None:
         return  # Already loaded (fast path, no lock needed)
@@ -75,12 +76,16 @@ def _load_models():
         print("[STARTUP] Loading BM25 Lexical Engine...")
         bm25_model = SparseTextEmbedding(model_name="Qdrant/bm25")
 
+        print("[STARTUP] Loading Multilingual Dense Text Engine...")
+        dense_text_model = TextEmbedding(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+
         from ingestion import LocalHotIngestionPipeline
 
         ingestion_engine = LocalHotIngestionPipeline(
             clip_model=clip_model,
             clip_tokenizer=clip_tokenizer,
             clip_transform=clip_transform,
+            dense_text_model=dense_text_model,
             db_client=qdrant_client
         )
 
