@@ -289,7 +289,31 @@ def bg_ingest_task(video_id: str, file_path: str):
             return
                     
         if video_id in active_ingestions:
+            active_ingestions[video_id]["last_message"] = "data: [5/5] Rebuilding GraphRAG Communities... (This takes a minute)\n\n"
+            print(f"[INGEST] Computing GraphRAG communities for '{video_id}'...")
+            
+            # Recompute GraphRAG communities automatically so it's ready out of the box
+            try:
+                folder_lib = get_media_library()["folderLibrary"]
+                folder_name = folder_lib.get(video_id, "")
+                if folder_name == "":
+                    folder_name = "Uncategorized"
+                    
+                target_ids = []
+                for vid, f in folder_lib.items():
+                    if (f == "" and folder_name == "Uncategorized") or f == folder_name:
+                        target_ids.append(vid)
+                
+                graph_service.compute_communities(folder_name, target_ids)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"[INGEST] Warning: Community detection failed: {e}")
+                
             print(f"[INGEST] Job '{video_id}' completed successfully.")
+            active_ingestions[video_id]["last_message"] = "data: [COMPLETE] Ingestion and GraphRAG processing finished!\n\n"
+            import time
+            time.sleep(0.5)
             active_ingestions[video_id]["done"] = True
     except Exception as e:
         import traceback
@@ -680,7 +704,7 @@ def chat_with_video(request: ChatRequest):
         is_global_query = is_folder_context and any(word in request.query.lower() for word in ["summarize", "overall", "all", "themes", "connections"])
         
         if is_global_query:
-            graph_context = graph_service.get_global_community_summaries(video_ids=request.target_video_ids)
+            graph_context = graph_service.get_global_community_summaries(folder_name=request.folder_name)
         else:
             query_words = [w for w in request.query.split() if len(w) > 4]
             graph_context = graph_service.get_local_graph_context(query_words)
@@ -804,6 +828,43 @@ def delete_video(video_id: str, delete_file: bool = Query(default=True)):
         "file_deleted": file_deleted
     }
 
+@router.delete("/folder/{folder_name}")
+def delete_folder(folder_name: str):
+    """
+    Deletes an entire folder, all its media files, and removes their data from Qdrant and Kuzu.
+    """
+    import urllib.parse
+    import shutil
+    folder_name = urllib.parse.unquote(folder_name)
+    folder_path = os.path.join("media", folder_name)
+    
+    if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+        return {"success": False, "error": f"Folder '{folder_name}' not found."}
+
+    videos_deleted = 0
+    # Process all files in the folder
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        if os.path.isfile(file_path):
+            raw_name = os.path.splitext(filename)[0]
+            video_id = re.sub(r'\W+', '_', raw_name.lower()).strip('_')
+            # The existing delete_video function cleans up DBs and removes the file
+            res = delete_video(video_id, delete_file=True)
+            if res.get("success"):
+                videos_deleted += 1
+
+    # Remove the directory itself (including any non-video loose files left behind)
+    try:
+        shutil.rmtree(folder_path)
+    except Exception as e:
+        print(f"Warning: Failed to completely remove directory {folder_path}: {e}")
+
+    return {
+        "success": True, 
+        "folder": folder_name, 
+        "videos_deleted": videos_deleted
+    }
+
 @router.post("/video/{video_id}/move")
 def move_video(video_id: str, request: VideoMoveRequest):
     """Moves a video file to a new folder inside /media"""
@@ -819,6 +880,7 @@ def move_video(video_id: str, request: VideoMoveRequest):
     
     # Find current file and any duplicates
     moved = False
+    old_folder = None
     for root, dirs, files in os.walk("media"):
         for filename in files:
             raw_name = os.path.splitext(filename)[0]
@@ -827,6 +889,10 @@ def move_video(video_id: str, request: VideoMoveRequest):
                 old_path = os.path.join(root, filename)
                 new_path = os.path.join(target_dir, filename)
                 
+                rel_old = os.path.relpath(old_path, "media")
+                old_folder = os.path.dirname(rel_old).replace('\\', '/')
+                if old_folder == "." or old_folder == "": old_folder = "Uncategorized"
+                
                 if old_path != new_path:
                     if os.path.exists(new_path):
                         # Destination already has a copy, deduplicate by deleting this extra copy
@@ -834,6 +900,29 @@ def move_video(video_id: str, request: VideoMoveRequest):
                     else:
                         shutil.move(old_path, new_path)
                 moved = True
+                
+    if moved:
+        new_folder = request.target_folder if request.target_folder else "Uncategorized"
+        
+        # Trigger background regeneration of communities for both affected folders
+        def recompute_folder_communities(folder_name):
+            try:
+                folder_lib = get_media_library()["folderLibrary"]
+                target_ids = []
+                for vid, f in folder_lib.items():
+                    if (f == "" and folder_name == "Uncategorized") or f == folder_name:
+                        target_ids.append(vid)
+                graph_service.compute_communities(folder_name, target_ids)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"Failed to recompute communities for folder '{folder_name}' after move: {e}")
+                
+        import threading
+        if old_folder:
+            threading.Thread(target=recompute_folder_communities, args=(old_folder,), daemon=True).start()
+        if new_folder != old_folder:
+            threading.Thread(target=recompute_folder_communities, args=(new_folder,), daemon=True).start()
             
     return {"success": moved}
 
@@ -872,3 +961,25 @@ def get_graph_data(target_video_ids: str = Query(None)):
         video_ids = [vid.strip() for vid in target_video_ids.split(",") if vid.strip()]
         return graph_service.export_graph_json(video_ids)
     return graph_service.export_graph_json()
+
+from pydantic import BaseModel
+class ComputeGraphRequest(BaseModel):
+    folder_name: str = "Uncategorized"
+
+@router.post("/graph/compute_communities")
+def compute_graph_communities(request: ComputeGraphRequest, bg_tasks: BackgroundTasks):
+    """Triggers the Louvain clustering and LLM summarization of the graph for a specific folder."""
+    # Find all videos in this folder
+    folder_lib = get_media_library()["folderLibrary"]
+    
+    # "Uncategorized" maps to "" in folderLibrary internally based on paths
+    target_ids = []
+    for vid, f in folder_lib.items():
+        if (f == "" and request.folder_name == "Uncategorized") or f == request.folder_name:
+            target_ids.append(vid)
+            
+    if not target_ids:
+        return {"success": False, "error": f"No videos found in folder '{request.folder_name}'"}
+        
+    bg_tasks.add_task(graph_service.compute_communities, request.folder_name, target_ids)
+    return {"success": True, "message": f"GraphRAG Community Detection started for {request.folder_name}."}

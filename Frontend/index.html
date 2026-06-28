@@ -75,6 +75,7 @@
                         <div class="phase-step" id="phase-2" title="Phase 2: Scene Detection"></div>
                         <div class="phase-step" id="phase-3" title="Phase 3: Visual OCR"></div>
                         <div class="phase-step" id="phase-4" title="Phase 4: Vectorization"></div>
+                        <div class="phase-step" id="phase-5" title="Phase 5: GraphRAG Clustering"></div>
                     </div>
                     <div
                         style="display:flex; justify-content:space-between; align-items:flex-start; margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-secondary);">
@@ -114,7 +115,10 @@
                         style="display:none; width:100%; height:100%; border:none; border-radius:var(--radius-lg);"></iframe>
                     <div id="graph-view" style="display:none; width:100%; height:100%; border-radius:var(--radius-lg); background:var(--bg-base); position:relative;">
                         <div id="graph-network" style="width:100%; height:100%;"></div>
-                        <button id="refresh-graph-btn" style="position:absolute; top:10px; right:10px; z-index:10; background:var(--bg-panel); color:var(--text-primary); border:1px solid var(--border); padding:4px 12px; border-radius:4px; font-size:12px; cursor:pointer;">Refresh Graph</button>
+                        <div style="position:absolute; top:10px; right:10px; z-index:10; display:flex; gap:8px;">
+                            <button id="compute-communities-btn" style="background:var(--accent); color:white; border:none; padding:4px 12px; border-radius:4px; font-size:12px; cursor:pointer;">Build GraphRAG</button>
+                            <button id="refresh-graph-btn" style="background:var(--bg-panel); color:var(--text-primary); border:1px solid var(--border); padding:4px 12px; border-radius:4px; font-size:12px; cursor:pointer;">Refresh Graph</button>
+                        </div>
                     </div>
                 </div>
 

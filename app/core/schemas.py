@@ -12,6 +12,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     query: str
     target_video_ids: List[str]
+    folder_name: str = "Uncategorized"
     chat_history: List[ChatMessage]
 
 class VideoMoveRequest(BaseModel):

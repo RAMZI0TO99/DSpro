@@ -178,7 +178,42 @@ function renderLibrary() {
 
         const folderHeader = document.createElement('div');
         folderHeader.className = 'folder-header';
-        folderHeader.innerHTML = `📁 ${folderName} <span class="folder-count">(${folders[folderName].length})</span>`;
+        folderHeader.innerHTML = `
+            <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+                <span>📁 ${folderName} <span class="folder-count">(${folders[folderName].length})</span></span>
+                ${folderName !== "Uncategorized" ? `<button class="folder-delete-btn" style="background:transparent; border:none; cursor:pointer;" title="Delete Entire Folder">🗑️</button>` : ''}
+            </div>
+        `;
+
+        if (folderName !== "Uncategorized") {
+            const delBtn = folderHeader.querySelector('.folder-delete-btn');
+            if (delBtn) {
+                delBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    if (confirm(`Are you sure you want to completely delete the folder "${folderName}" and all its videos? This will wipe them from the databases and disk.`)) {
+                        delBtn.innerText = "⏳";
+                        try {
+                            const res = await fetch('/folder/' + encodeURIComponent(folderName), { method: 'DELETE' });
+                            const data = await res.json();
+                            if (data.success) {
+                                addMessage('ai', `✅ Deleted folder "${folderName}" and its ${data.videos_deleted} videos from the system.`);
+                                if (activeFolderId === folderName) {
+                                    activeFolderId = "Uncategorized";
+                                }
+                                bootSystem();
+                            } else {
+                                alert("Failed: " + data.error);
+                                delBtn.innerText = "🗑️";
+                            }
+                        } catch (err) {
+                            console.error(err);
+                            alert("Error deleting folder.");
+                            delBtn.innerText = "🗑️";
+                        }
+                    }
+                });
+            }
+        }
         folderDiv.appendChild(folderHeader);
 
         const folderContent = document.createElement('div');
@@ -540,6 +575,7 @@ async function handleChat() {
             body: JSON.stringify({
                 query,
                 target_video_ids: targetIds,
+                folder_name: (activeFolderId && activeFolderId !== "All Media") ? activeFolderId : "Uncategorized",
                 chat_history: previousHistory
             }),
             signal: currentAbortController.signal
@@ -606,7 +642,7 @@ async function handleChat() {
 // PROGRESS BAR HELPERS
 // ============================================================
 const progressBar = document.getElementById('ingest-progress-bar');
-const phaseSteps = [1, 2, 3, 4].map(n => document.getElementById(`phase-${n}`));
+const phaseSteps = [1, 2, 3, 4, 5].map(n => document.getElementById(`phase-${n}`));
 
 function setPhase(n) {
     // n = 0 means reset, 1-4 means that phase is active, -1 means all done
@@ -733,10 +769,11 @@ function startIngestStreamForQueue(videoId, filePath, fileName) {
         ingestFilename.textContent = fileName;
         ingestStatus.textContent = msg;
 
-        if (msg.includes('[1/4]')) setPhase(1);
-        else if (msg.includes('[2/4]')) setPhase(2);
-        else if (msg.includes('[3/4]')) setPhase(3);
-        else if (msg.includes('[4/4]')) setPhase(4);
+        if (msg.includes('[1/4]') || msg.includes('[1/5]')) setPhase(1);
+        else if (msg.includes('[2/4]') || msg.includes('[2/5]')) setPhase(2);
+        else if (msg.includes('[3/4]') || msg.includes('[3/5]')) setPhase(3);
+        else if (msg.includes('[4/4]') || msg.includes('[4/5]')) setPhase(4);
+        else if (msg.includes('[5/5]')) setPhase(5);
 
         if (msg.includes('[COMPLETE]') || msg.includes('[CANCELED]')) {
             eventSource.close();
@@ -786,10 +823,11 @@ function startIngestStream(videoId, filePath) {
         const msg = event.data;
         ingestStatus.textContent = msg;
 
-        if (msg.includes('[1/4]')) setPhase(1);
-        else if (msg.includes('[2/4]')) setPhase(2);
-        else if (msg.includes('[3/4]')) setPhase(3);
-        else if (msg.includes('[4/4]')) setPhase(4);
+        if (msg.includes('[1/4]') || msg.includes('[1/5]')) setPhase(1);
+        else if (msg.includes('[2/4]') || msg.includes('[2/5]')) setPhase(2);
+        else if (msg.includes('[3/4]') || msg.includes('[3/5]')) setPhase(3);
+        else if (msg.includes('[4/4]') || msg.includes('[4/5]')) setPhase(4);
+        else if (msg.includes('[5/5]')) setPhase(5);
 
         if (msg.includes('[COMPLETE]') || msg.includes('[CANCELED]')) {
             eventSource.close();
@@ -1190,6 +1228,30 @@ if (refreshGraphBtn) {
     refreshGraphBtn.addEventListener('click', loadGraph);
 }
 
+const computeBtn = document.getElementById('compute-communities-btn');
+if (computeBtn) {
+    computeBtn.addEventListener('click', async () => {
+        if (!confirm("This will recompute GraphRAG communities using the LLM. It may take a minute. Continue?")) return;
+        computeBtn.innerText = 'Building...';
+        computeBtn.disabled = true;
+        try {
+            const currentFolder = (activeFolderId && activeFolderId !== "All Media") ? activeFolderId : "Uncategorized";
+            await fetch('/graph/compute_communities', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folder_name: currentFolder })
+            });
+            addMessage('ai', `✅ Started GraphRAG Community Detection in the background for folder: ${currentFolder}. Global summaries will be updated soon.`);
+        } catch (e) {
+            console.error(e);
+        }
+        setTimeout(() => {
+            computeBtn.innerText = 'Build GraphRAG';
+            computeBtn.disabled = false;
+        }, 3000);
+    });
+}
+
 async function loadGraph() {
     try {
         const container = document.getElementById('graph-network');
@@ -1197,7 +1259,11 @@ async function loadGraph() {
 
         let queryParams = "";
         if (activeFolderId && activeFolderId !== "All Media") {
-            const targetIds = Object.keys(folderLibrary).filter(id => folderLibrary[id] === activeFolderId);
+            const targetIds = Object.keys(folderLibrary).filter(id => {
+                let f = folderLibrary[id] || "Uncategorized";
+                if (f === "." || f === "") f = "Uncategorized";
+                return f === activeFolderId;
+            });
             if (targetIds.length > 0) {
                 queryParams = `?target_video_ids=${targetIds.join(',')}`;
             }
@@ -1244,7 +1310,7 @@ async function loadGraph() {
                 solver: 'forceAtlas2Based',
                 forceAtlas2Based: { 
                     gravitationalConstant: -50, 
-                    centralGravity: 0.0, // Set to 0 so the graph doesn't pull back to the center!
+                    centralGravity: 0.01, 
                     springLength: 200, 
                     springConstant: 0.08 
                 },
@@ -1269,27 +1335,6 @@ async function loadGraph() {
             network.setOptions({ physics: false });
         });
 
-        // When dragging starts, turn physics back on so the springs pull ALL connected nodes recursively
-        network.on("dragStart", function(params) {
-            if (params.nodes && params.nodes.length > 0) {
-                network.setOptions({ physics: true });
-                const nodeId = params.nodes[0];
-                nodes.update({id: nodeId, fixed: {x: false, y: false}});
-            }
-        });
-
-        // When a user drops the node, lock it in place, then turn physics off shortly after the neighbors settle
-        network.on("dragEnd", function(params) {
-            if (params.nodes && params.nodes.length > 0) {
-                const nodeId = params.nodes[0];
-                nodes.update({id: nodeId, fixed: {x: true, y: true}});
-                
-                // Let the neighbors spring into place for 1 second, then freeze the whole graph again
-                setTimeout(() => {
-                    network.setOptions({ physics: false });
-                }, 1000);
-            }
-        });
 
     } catch (e) {
         console.error("Failed to load graph", e);
