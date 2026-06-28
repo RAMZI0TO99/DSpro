@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 </head>
 
 <body>
@@ -93,8 +93,14 @@
         ============================================================ -->
             <main id="player-pane">
                 <div id="player-header">
-                    <div id="now-playing-dot"></div>
-                    <div id="now-playing-title">No video selected</div>
+                    <div style="display:flex; align-items:center; flex:1; overflow:hidden;">
+                        <div id="now-playing-dot"></div>
+                        <div id="now-playing-title" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">No video selected</div>
+                    </div>
+                    <div id="view-tabs" style="display:flex; margin-left:10px; gap:8px;">
+                        <button id="tab-player" style="background:var(--accent); color:white; border:none; padding:4px 12px; border-radius:12px; font-size:12px; cursor:pointer;">Player</button>
+                        <button id="tab-graph" style="background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); padding:4px 12px; border-radius:12px; font-size:12px; cursor:pointer;">Graph</button>
+                    </div>
                 </div>
 
                 <div id="video-wrapper">
@@ -106,6 +112,10 @@
                         alt="Selected Image">
                     <iframe id="main-pdf"
                         style="display:none; width:100%; height:100%; border:none; border-radius:var(--radius-lg);"></iframe>
+                    <div id="graph-view" style="display:none; width:100%; height:100%; border-radius:var(--radius-lg); background:var(--bg-base); position:relative;">
+                        <div id="graph-network" style="width:100%; height:100%;"></div>
+                        <button id="refresh-graph-btn" style="position:absolute; top:10px; right:10px; z-index:10; background:var(--bg-panel); color:var(--text-primary); border:1px solid var(--border); padding:4px 12px; border-radius:4px; font-size:12px; cursor:pointer;">Refresh Graph</button>
+                    </div>
                 </div>
 
                 <!-- Search Result Cards -->

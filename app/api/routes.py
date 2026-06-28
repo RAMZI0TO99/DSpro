@@ -11,6 +11,7 @@ import json
 from app.core.schemas import SearchRequest, ChatRequest, VideoMoveRequest
 from app.core.config import llm_settings, save_settings, LLMSettings
 from app.services.llm_service import llm_service
+from app.services.graph_service import graph_service
 from app.services import vector_search
 import torch
 from qdrant_client import models
@@ -512,19 +513,25 @@ def chat_with_video(request: ChatRequest):
         # 1. Retrieve ALL chunks to see if we need RAG
         records = []
         for vid_id in request.target_video_ids:
-            v_records, _ = qdrant_client.scroll(
-                collection_name="video_segments",
-                scroll_filter=models.Filter(must=[
-                    models.FieldCondition(
-                        key="video_id",
-                        match=models.MatchValue(value=vid_id)
-                    )
-                ]),
-                limit=1000,
-                with_payload=True,
-                with_vectors=False
-            )
-            records.extend(v_records)
+            try:
+                v_records, _ = qdrant_client.scroll(
+                    collection_name="video_segments",
+                    scroll_filter=models.Filter(must=[
+                        models.FieldCondition(
+                            key="video_id",
+                            match=models.MatchValue(value=vid_id)
+                        )
+                    ]),
+                    limit=1000,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                records.extend(v_records)
+            except IndexError:
+                # Qdrant local backend throws IndexError if the collection is completely empty
+                pass
+            except Exception as e:
+                print(f"Warning: Failed to scroll qdrant for video {vid_id}: {e}")
 
         if not records:
             yield "❌ *Error: No data found for the selected media in the database.*\n\n"
@@ -641,6 +648,12 @@ def chat_with_video(request: ChatRequest):
                 valid_chunks.append(r)
                 current_chars += len(chunk_text)
                 
+            if not valid_chunks and final_points:
+                # Fallback for meta-queries (e.g. "summarize") that have low semantic overlap
+                valid_chunks = final_points[:10]
+                for r in valid_chunks:
+                    current_chars += len(r.payload.get("transcript", ""))
+                
             # Build the compressed transcript
             video_transcripts = {}
             for r in valid_chunks:
@@ -660,18 +673,50 @@ def chat_with_video(request: ChatRequest):
 
         # 2. Build the System Prompt
         is_folder_context = len(request.target_video_ids) > 1
-        context_desc = "The user is asking about the contents of a folder with multiple files." if is_folder_context else "The user is asking about a specific file."
+        
+        # --- GRAPH RAG INJECTION ---
+        
+        # Determine if it's a global query
+        is_global_query = is_folder_context and any(word in request.query.lower() for word in ["summarize", "overall", "all", "themes", "connections"])
+        
+        if is_global_query:
+            graph_context = graph_service.get_global_community_summaries(video_ids=request.target_video_ids)
+        else:
+            query_words = [w for w in request.query.split() if len(w) > 4]
+            graph_context = graph_service.get_local_graph_context(query_words)
+            if not graph_context.strip():
+                graph_context = "No direct graph relationships found."
 
-        system_instruction = f"""You are a helpful AI Assistant. You are provided with data extracted from the following file(s):
-{chr(10).join(file_summaries)}
+        context_desc = "The user is asking about the contents of a folder with multiple files." if is_folder_context else "The user is asking about a specific file."
+        
+        # Build a list of all files in the current context to prevent hallucination
+        all_target_files = []
+        for vid in request.target_video_ids:
+            ext = media_lib.get(vid, "").split('.')[-1].lower()
+            if ext == "pdf": ftype = "PDF"
+            elif ext in ["jpg", "jpeg", "png", "webp"]: ftype = "Image"
+            elif ext in ["mp3", "wav", "m4a"]: ftype = "Audio"
+            elif ext in ["mp4", "mkv"]: ftype = "Video"
+            else: ftype = "Media"
+            all_target_files.append(f"- {vid} ({ftype})")
+            
+        folder_scope_str = "\n".join(all_target_files)
+
+        system_instruction = f"""You are a helpful AI Assistant. You are chatting with the user about the following {len(request.target_video_ids)} file(s) in their current folder context:
+{folder_scope_str}
 
 {context_desc}
-Based ONLY on the provided extracted data, answer the user's question. 
+
+Based ONLY on the provided extracted data AND the Knowledge Graph Context, answer the user's question. 
+If the user asks a general question about the folder (like how many files there are), use the file list provided above.
 Keep your response conversational, concise, and direct. Do NOT provide a long detailed breakdown of the entire file unless the user explicitly asks for a summary.
 
-Extracted Data:
+Knowledge Graph Context:
+{graph_context}
+
+Relevant Extracted Data (May only contain snippets from a subset of the files):
 {full_transcript}"""
-        
+
         # 3. Format the chat history and stream the response
         provider = llm_settings.provider.lower()
         model_name = llm_settings.model
@@ -723,19 +768,23 @@ def delete_video(video_id: str, delete_file: bool = Query(default=True)):
         )
         vectors_deleted = count_result.count
 
-        qdrant_client.delete(
-            collection_name="video_segments",
-            points_selector=models.FilterSelector(
-                filter=models.Filter(must=[
-                    models.FieldCondition(
-                        key="video_id",
-                        match=models.MatchValue(value=video_id)
-                    )
-                ])
+        if vectors_deleted > 0:
+            qdrant_client.delete(
+                collection_name="video_segments",
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(must=[
+                        models.FieldCondition(
+                            key="video_id",
+                            match=models.MatchValue(value=video_id)
+                        )
+                    ])
+                )
             )
-        )
+
+        # 1.5 Delete from Knowledge Graph
+        graph_service.delete_video(video_id)
     except Exception as e:
-        print(f"[DELETE] Skipping Qdrant deletion (collection may not exist yet): {e}")
+        print(f"Warning: Failed to delete qdrant or graph vectors: {e}")
 
     # 3. Optionally delete the media file from disk
     file_deleted = False
@@ -814,3 +863,12 @@ def update_llm_settings(new_settings: dict):
         return {"success": True, "message": "LLM Settings updated and loaded successfully."}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+@router.get("/graph")
+def get_graph_data(target_video_ids: str = Query(None)):
+    """Returns the knowledge graph nodes and edges for visualization."""
+    if target_video_ids:
+        # split comma separated string into list
+        video_ids = [vid.strip() for vid in target_video_ids.split(",") if vid.strip()]
+        return graph_service.export_graph_json(video_ids)
+    return graph_service.export_graph_json()

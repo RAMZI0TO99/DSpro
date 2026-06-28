@@ -11,7 +11,8 @@ from scenedetect import detect, ContentDetector
 from qdrant_client import QdrantClient, models
 from fastembed import SparseTextEmbedding
 import numpy as np
-
+import threading
+from app.services.graph_service import graph_service
 
 class LocalHotIngestionPipeline:
     def __init__(self, clip_model, clip_tokenizer, clip_transform, dense_text_model, db_client):
@@ -172,6 +173,10 @@ class LocalHotIngestionPipeline:
             }
         )
         self.db_client.upsert(collection_name="video_segments", points=[point])
+        
+        yield f"data: [5/5] Extracting Graph Knowledge in background...\n\n"
+        threading.Thread(target=lambda: graph_service.ingest_chunk(point.payload['video_id'], point.payload['start_timestamp'], point.payload['end_timestamp'], point.payload['transcript'])).start()
+        
         yield f"data: [COMPLETE] Image '{media_id}' successfully ingested!\n\n"
 
     def _process_audio(self, file_path: str, media_id: str):
@@ -231,6 +236,12 @@ class LocalHotIngestionPipeline:
             for i in range(0, len(points_to_upsert), 50):
                 self.db_client.upsert(collection_name="video_segments", points=points_to_upsert[i:i+50])
                 
+        yield f"data: [5/5] Extracting Graph Knowledge in background...\n\n"
+        def extract_graph_audio():
+            for p in points_to_upsert:
+                graph_service.ingest_chunk(p.payload['video_id'], p.payload['start_timestamp'], p.payload['end_timestamp'], p.payload['transcript'])
+        threading.Thread(target=extract_graph_audio).start()
+        
         yield f"data: [COMPLETE] Audio '{media_id}' successfully ingested!\n\n"
 
     def _process_pdf(self, file_path: str, media_id: str):
@@ -305,6 +316,12 @@ class LocalHotIngestionPipeline:
             for i in range(0, len(points_to_upsert), 50):
                 self.db_client.upsert(collection_name="video_segments", points=points_to_upsert[i:i+50])
 
+        yield f"data: [5/5] Extracting Graph Knowledge in background...\n\n"
+        def extract_graph_pdf():
+            for p in points_to_upsert:
+                graph_service.ingest_chunk(p.payload['video_id'], p.payload['start_timestamp'], p.payload['end_timestamp'], p.payload['transcript'])
+        threading.Thread(target=extract_graph_pdf).start()
+        
         yield f"data: [COMPLETE] PDF Document '{media_id}' successfully ingested!\n\n"
 
     def _process_video(self, video_path: str, video_id: str):
@@ -472,4 +489,13 @@ class LocalHotIngestionPipeline:
         if points_to_upsert:
             self.db_client.upsert(collection_name="video_segments", points=points_to_upsert)
 
+        yield f"data: [5/5] Extracting Graph Knowledge in background...\n\n"
+        def extract_graph_video():
+            import time
+            for p in points_to_upsert:
+                graph_service.ingest_chunk(p.payload['video_id'], p.payload['start_timestamp'], p.payload['end_timestamp'], p.payload['transcript'])
+                # Yield the LLM queue to allow chat requests to interleave
+                time.sleep(1.5)
+        threading.Thread(target=extract_graph_video).start()
+        
         yield f"data: [COMPLETE] '{video_id}' successfully indexed — {len(points_to_upsert)} chunks stored.\n\n"

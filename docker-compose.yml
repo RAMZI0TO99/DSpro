@@ -46,6 +46,7 @@ services:
     volumes:
       # Application media (user uploads)
       - media_data:/app/media
+      - graph_data:/app/graph_db
 
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/" ]
@@ -71,4 +72,6 @@ volumes:
   qdrant_data:
     driver: local
   media_data:
+    driver: local
+  graph_data:
     driver: local

@@ -233,7 +233,13 @@ function renderLibrary() {
         });
 
         folderHeader.addEventListener('click', () => {
+            activeFolderId = folderName;
             folderContent.style.display = folderContent.style.display === 'none' ? 'block' : 'none';
+            
+            // If the graph is currently being viewed, update it to show this folder
+            if (document.getElementById('tab-graph').classList.contains('active')) {
+                loadGraph();
+            }
         });
 
         folderHeader.addEventListener('dragover', (e) => {
@@ -1116,3 +1122,177 @@ settingsOverlay.addEventListener('click', (e) => {
 // BOOT
 // ============================================================
 bootSystem();
+
+
+
+
+
+
+// ============================================================
+// KNOWLEDGE GRAPH VISUALIZATION
+// ============================================================
+const tabPlayer = document.getElementById('tab-player');
+const tabGraph = document.getElementById('tab-graph');
+const graphView = document.getElementById('graph-view');
+const refreshGraphBtn = document.getElementById('refresh-graph-btn');
+const mainVideoEl = document.getElementById('main-video');
+const mainImageEl = document.getElementById('main-image');
+const mainPdfEl = document.getElementById('main-pdf');
+
+let network = null;
+
+if (tabPlayer && tabGraph) {
+    tabPlayer.addEventListener('click', () => {
+        tabPlayer.style.background = 'var(--accent)';
+        tabPlayer.style.color = 'white';
+        tabPlayer.style.border = 'none';
+
+        tabGraph.style.background = 'var(--bg-base)';
+        tabGraph.style.color = 'var(--text-primary)';
+        tabGraph.style.border = '1px solid var(--border)';
+
+        graphView.style.display = 'none';
+
+        // Restore whatever was playing
+        if (activeVideoId) {
+            const ext = videoLibrary[activeVideoId].split('.').pop().toLowerCase();
+            if (['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
+                mainImageEl.style.display = 'block';
+            } else if (ext === 'pdf') {
+                mainPdfEl.style.display = 'block';
+            } else {
+                mainVideoEl.style.display = 'block';
+            }
+        }
+    });
+
+    tabGraph.addEventListener('click', () => {
+        tabGraph.style.background = 'var(--accent)';
+        tabGraph.style.color = 'white';
+        tabGraph.style.border = 'none';
+
+        tabPlayer.style.background = 'var(--bg-base)';
+        tabPlayer.style.color = 'var(--text-primary)';
+        tabPlayer.style.border = '1px solid var(--border)';
+
+        mainVideoEl.style.display = 'none';
+        mainImageEl.style.display = 'none';
+        mainPdfEl.style.display = 'none';
+        graphView.style.display = 'block';
+
+        if (!network) {
+            loadGraph();
+        }
+    });
+}
+
+if (refreshGraphBtn) {
+    refreshGraphBtn.addEventListener('click', loadGraph);
+}
+
+async function loadGraph() {
+    try {
+        const container = document.getElementById('graph-network');
+        container.innerHTML = '<div style="display:flex; justify-content:center; align-items:center; height:100%; color:var(--text-secondary);">Loading Graph...</div>';
+
+        let queryParams = "";
+        if (activeFolderId && activeFolderId !== "All Media") {
+            const targetIds = Object.keys(folderLibrary).filter(id => folderLibrary[id] === activeFolderId);
+            if (targetIds.length > 0) {
+                queryParams = `?target_video_ids=${targetIds.join(',')}`;
+            }
+        }
+
+        const res = await fetch(`/graph${queryParams}`);
+        const data = await res.json();
+
+        if (!data.nodes || data.nodes.length === 0) {
+            container.innerHTML = `<div style="display:flex; justify-content:center; align-items:center; height:100%; color:var(--text-secondary);">No Graph Data Available for ${activeFolderId || 'All Media'}.</div>`;
+            return;
+        }
+
+        const nodes = new vis.DataSet(data.nodes.map(n => ({
+            id: n.id,
+            label: n.label,
+            group: n.group,
+            title: `Type: ${n.group}`
+        })));
+
+        const edges = new vis.DataSet(data.edges.map(e => ({
+            from: e.from,
+            to: e.to,
+            label: e.label,
+            font: { align: 'middle', size: 10, color: 'rgba(255,255,255,0.7)' }
+        })));
+
+        const graphData = { nodes, edges };
+        const options = {
+            nodes: {
+                shape: 'dot',
+                size: 16,
+                font: { size: 12, color: '#ffffff' },
+                borderWidth: 2,
+                shadow: true
+            },
+            edges: {
+                width: 1,
+                color: { inherit: 'from', opacity: 0.6 },
+                smooth: { type: 'continuous' },
+                font: { size: 11, color: '#a1a1aa', align: 'middle', strokeWidth: 0 }
+            },
+            physics: {
+                solver: 'forceAtlas2Based',
+                forceAtlas2Based: { 
+                    gravitationalConstant: -50, 
+                    centralGravity: 0.0, // Set to 0 so the graph doesn't pull back to the center!
+                    springLength: 200, 
+                    springConstant: 0.08 
+                },
+                maxVelocity: 50,
+                timestep: 0.35,
+                stabilization: { iterations: 150 }
+            },
+            groups: {
+                Person: { color: { background: '#ef4444', border: '#b91c1c' } },
+                Organization: { color: { background: '#3b82f6', border: '#1d4ed8' } },
+                Location: { color: { background: '#10b981', border: '#047857' } },
+                Concept: { color: { background: '#f59e0b', border: '#b45309' } }
+            },
+            interaction: { hover: true, tooltipDelay: 200 }
+        };
+
+        container.innerHTML = '';
+        network = new vis.Network(container, graphData, options);
+
+        // Turn off physics after the initial layout settles so nodes stay exactly where they are
+        network.on("stabilizationIterationsDone", function () {
+            network.setOptions({ physics: false });
+        });
+
+        // When dragging starts, turn physics back on so the springs pull ALL connected nodes recursively
+        network.on("dragStart", function(params) {
+            if (params.nodes && params.nodes.length > 0) {
+                network.setOptions({ physics: true });
+                const nodeId = params.nodes[0];
+                nodes.update({id: nodeId, fixed: {x: false, y: false}});
+            }
+        });
+
+        // When a user drops the node, lock it in place, then turn physics off shortly after the neighbors settle
+        network.on("dragEnd", function(params) {
+            if (params.nodes && params.nodes.length > 0) {
+                const nodeId = params.nodes[0];
+                nodes.update({id: nodeId, fixed: {x: true, y: true}});
+                
+                // Let the neighbors spring into place for 1 second, then freeze the whole graph again
+                setTimeout(() => {
+                    network.setOptions({ physics: false });
+                }, 1000);
+            }
+        });
+
+    } catch (e) {
+        console.error("Failed to load graph", e);
+        document.getElementById('graph-network').innerHTML = '<div style="display:flex; justify-content:center; align-items:center; height:100%; color:var(--danger);">Error loading graph.</div>';
+    }
+}

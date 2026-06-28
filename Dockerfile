@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── 2. Working directory ───────────────────────────────────
 WORKDIR /app
 
-RUN mkdir -p /app/media /app/qdrant_db
+RUN mkdir -p /app/media /app/qdrant_db /app/graph_db
 
 # ── 4. Install Python dependencies ─────────────────────────
 COPY requirements.txt .
