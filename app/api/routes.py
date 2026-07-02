@@ -47,6 +47,21 @@ def get_dense_text_model():
     _ensure_models_loaded()
     return vector_search.dense_text_model
 
+def get_clap_text_vector(query_text: str):
+    """Generates a 512-dimensional CLAP text embedding for search query alignment."""
+    _ensure_models_loaded()
+    engine = get_ingestion_engine()
+    if engine is not None:
+        extractor = engine.acoustic_extractor
+        extractor._load_model()
+        device = get_device()
+        inputs = extractor.processor(text=[query_text], padding=True, return_tensors="pt").to(device)
+        with torch.no_grad():
+            text_features = extractor.model.get_text_features(**inputs)
+            text_features /= text_features.norm(dim=-1, keepdim=True)
+            return text_features.cpu().squeeze(0).tolist()
+    return [0.0] * 512
+
 router = APIRouter()
 
 # --- Upload limits ---
@@ -459,12 +474,12 @@ def search_video(request: SearchRequest):
             values=sparse_result.values.tolist()
         )
 
-        # 3b. Generate Multilingual Dense Text Vector (Original Language)
-        multilingual_dense_vector = list(dense_text_model.embed([query_original]))[0].tolist()
+        # 3b. Generate CLAP Acoustic Text Vector for sound alignment
+        audio_dense_vector = get_clap_text_vector(query_original)
 
         # 4. Tri-Modal Hybrid Search (Sequential searches to preserve absolute scores)
         visual_res = qdrant_client.query_points(collection_name="video_segments", query=dense_vector, using="visual", limit=request.top_k, with_payload=True).points
-        audio_res = qdrant_client.query_points(collection_name="video_segments", query=multilingual_dense_vector, using="audio", limit=request.top_k, with_payload=True).points
+        audio_res = qdrant_client.query_points(collection_name="video_segments", query=audio_dense_vector, using="audio", limit=request.top_k, with_payload=True).points
         sparse_res = qdrant_client.query_points(collection_name="video_segments", query=sparse_vector, using="text_sparse", limit=request.top_k, with_payload=True).points
         
         batch_res = [visual_res, audio_res, sparse_res]
@@ -628,8 +643,8 @@ def chat_with_video(request: ChatRequest):
                 values=sparse_result.values.tolist()
             )
             
-            dense_text_model = get_dense_text_model()
-            multilingual_dense_vector = list(dense_text_model.embed([query_original]))[0].tolist()
+            # Generate CLAP Acoustic Text Vector for sound alignment
+            audio_dense_vector = get_clap_text_vector(query_original)
             
             video_filter = models.Filter(must=[
                 models.FieldCondition(
@@ -640,7 +655,7 @@ def chat_with_video(request: ChatRequest):
 
             # Retrieve a large pool (50 chunks) to filter down (Sequential to preserve absolute scores)
             visual_res = qdrant_client.query_points(collection_name="video_segments", query=dense_vector, using="visual", query_filter=video_filter, limit=50, with_payload=True).points
-            audio_res = qdrant_client.query_points(collection_name="video_segments", query=multilingual_dense_vector, using="audio", query_filter=video_filter, limit=50, with_payload=True).points
+            audio_res = qdrant_client.query_points(collection_name="video_segments", query=audio_dense_vector, using="audio", query_filter=video_filter, limit=50, with_payload=True).points
             sparse_res = qdrant_client.query_points(collection_name="video_segments", query=sparse_vector, using="text_sparse", query_filter=video_filter, limit=50, with_payload=True).points
             
             batch_res = [visual_res, audio_res, sparse_res]

@@ -13,6 +13,7 @@ from fastembed import SparseTextEmbedding
 import numpy as np
 import threading
 from app.services.graph_service import graph_service
+from app.services.audio_extractor import AcousticExtractor
 
 class LocalHotIngestionPipeline:
     def __init__(self, clip_model, clip_tokenizer, clip_transform, dense_text_model, db_client):
@@ -32,6 +33,8 @@ class LocalHotIngestionPipeline:
         self.audio_model = None
         self._align_model_cache = {}
         self.ocr_reader = None
+        
+        self.acoustic_extractor = AcousticExtractor()
 
         print("[BOOT-INGESTION COMPLETE] Ingestion Engine initialized (Models will lazy-load).\n")
 
@@ -85,7 +88,7 @@ class LocalHotIngestionPipeline:
                 collection_name=collection_name,
                 vectors_config={
                     "visual": models.VectorParams(size=768, distance=models.Distance.COSINE),
-                    "audio": models.VectorParams(size=384, distance=models.Distance.COSINE),
+                    "audio": models.VectorParams(size=512, distance=models.Distance.COSINE),  # CLAP 512-d acoustic embeddings
                 },
                 sparse_vectors_config={
                     "text_sparse": models.SparseVectorParams(modifier=models.Modifier.IDF)
@@ -149,15 +152,14 @@ class LocalHotIngestionPipeline:
 
         yield f"data: [3/4] Generating semantic & lexical embeddings...\n\n"
         # 3. Audio/Text Semantic + Lexical
+        aud_vec = [0.0] * 512
         if transcript:
-            aud_vec = list(self.dense_text_model.embed([transcript]))[0].tolist()
             sparse_res = list(self.bm25_model.embed([transcript]))[0]
             sparse_vec = models.SparseVector(
                 indices=sparse_res.indices.tolist(),
                 values=sparse_res.values.tolist()
             )
         else:
-            aud_vec = [0.0] * 384
             sparse_vec = models.SparseVector(indices=[], values=[])
 
         yield f"data: [4/4] Upserting image point to Qdrant...\n\n"
@@ -195,13 +197,16 @@ class LocalHotIngestionPipeline:
         )
         audio_segments = aligned_result["segments"]
         
+        # Free 16kHz audio array to conserve memory
+        del audio
         torch.cuda.empty_cache()
         gc.collect()
+
+        self.acoustic_extractor.load_audio_file(file_path)
 
         # 3. Chunking & Vectors
         yield f"data: [3/4] Chunking audio and generating vectors...\n\n"
         points_to_upsert = []
-        max_duration = 10.0
         
         for segment in audio_segments:
             start = segment.get("start", 0.0)
@@ -209,7 +214,8 @@ class LocalHotIngestionPipeline:
             text = segment.get("text", "").strip()
             if not text: continue
             
-            aud_vec = list(self.dense_text_model.embed([text]))[0].tolist()
+            # Extract 512-d CLAP acoustic features from audio slices
+            aud_vec = self.acoustic_extractor.extract_slice_features(start, end)
             
             sparse_res = list(self.bm25_model.embed([text]))[0]
             sparse_vec = models.SparseVector(
@@ -281,15 +287,14 @@ class LocalHotIngestionPipeline:
                 vis_vec = (feat / feat.norm(dim=-1, keepdim=True)).cpu().tolist()[0]
                 
             # Embed Audio/Text Semantic + Lexical
+            aud_vec = [0.0] * 512
             if transcript:
-                aud_vec = list(self.dense_text_model.embed([transcript]))[0].tolist()
                 sparse_res = list(self.bm25_model.embed([transcript]))[0]
                 sparse_vec = models.SparseVector(
                     indices=sparse_res.indices.tolist(),
                     values=sparse_res.values.tolist()
                 )
             else:
-                aud_vec = [0.0] * 384
                 sparse_vec = models.SparseVector(indices=[], values=[])
 
             # Upsert Point (Use page_num + 1 for user-facing 1-indexed page numbers)
@@ -351,9 +356,13 @@ class LocalHotIngestionPipeline:
             audio, self.device, return_char_alignments=False
         )
         audio_segments = aligned_result["segments"]
-
+        
+        # Free 16kHz audio array to conserve memory
+        del audio
         torch.cuda.empty_cache()
         gc.collect()
+
+        self.acoustic_extractor.load_audio_file(video_path)
 
         # ----------------------------------------------------------------
         # PHASE 2: SCENE DETECTION (max 10s chunks)
@@ -456,15 +465,16 @@ class LocalHotIngestionPipeline:
                 ]
                 transcript = f"{' '.join(speech)} {scene_ocr_data.get(idx, '')}".strip()
 
+                # Extract 512-d CLAP acoustic features from audio slices
+                aud_vec = self.acoustic_extractor.extract_slice_features(scene["start"], scene["end"])
+
                 if transcript:
-                    aud_vec = list(self.dense_text_model.embed([transcript]))[0].tolist()
                     sparse_res = list(self.bm25_model.embed([transcript]))[0]
                     sparse_vec = models.SparseVector(
                         indices=sparse_res.indices.tolist(),
                         values=sparse_res.values.tolist()
                     )
                 else:
-                    aud_vec = [0.0] * 384
                     sparse_vec = models.SparseVector(indices=[], values=[])
 
                 points_to_upsert.append(
