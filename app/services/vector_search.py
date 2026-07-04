@@ -5,14 +5,26 @@ import open_clip
 from fastembed import SparseTextEmbedding, TextEmbedding
 from qdrant_client import QdrantClient
 
-# --- Qdrant Initialization (fast) ---
-_qdrant_url = os.getenv("QDRANT_URL")
-if _qdrant_url:
-    print(f"Connecting to Qdrant service at {_qdrant_url}")
-    qdrant_client = QdrantClient(url=_qdrant_url)
-else:
-    print("Falling back to local Qdrant file-based database at ./qdrant_db")
-    qdrant_client = QdrantClient(path="./qdrant_db")
+class LazyQdrantClient:
+    def __init__(self):
+        self._client = None
+        self._lock = threading.Lock()
+
+    def __getattr__(self, name):
+        with self._lock:
+            if self._client is None:
+                _qdrant_url = os.getenv("QDRANT_URL")
+                if _qdrant_url:
+                    print(f"Connecting to Qdrant service at {_qdrant_url}")
+                    from qdrant_client import QdrantClient
+                    self._client = QdrantClient(url=_qdrant_url)
+                else:
+                    print("Falling back to local Qdrant file-based database at ./qdrant_db")
+                    from qdrant_client import QdrantClient
+                    self._client = QdrantClient(path="./qdrant_db")
+        return getattr(self._client, name)
+
+qdrant_client = LazyQdrantClient()
 
 # --- Lazy-load ML models on first use ---
 device = "cuda" if torch.cuda.is_available() else "cpu"

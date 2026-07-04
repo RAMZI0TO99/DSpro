@@ -57,7 +57,11 @@ def get_clap_text_vector(query_text: str):
         device = get_device()
         inputs = extractor.processor(text=[query_text], padding=True, return_tensors="pt").to(device)
         with torch.no_grad():
-            text_features = extractor.model.get_text_features(**inputs)
+            # Explicitly project to 512-d to avoid multivector/dimension mismatch issues
+            text_outputs = extractor.model.text_model(**inputs)
+            pooled_output = text_outputs.pooler_output
+            text_features = extractor.model.text_projection(pooled_output)
+            
             text_features /= text_features.norm(dim=-1, keepdim=True)
             return text_features.cpu().squeeze(0).tolist()
     return [0.0] * 512
@@ -484,6 +488,9 @@ def search_video(request: SearchRequest):
         
         batch_res = [visual_res, audio_res, sparse_res]
         
+        # Keep track of points returned by the sparse lexical search
+        sparse_ids = {r.id for r in sparse_res}
+        
         merged = {}
         for res_list in batch_res:
             for r in res_list:
@@ -503,7 +510,8 @@ def search_video(request: SearchRequest):
         for point in final_points:
             capped_score = min(point.score, 1.0)
             
-            if capped_score < THRESHOLD:
+            # Exact keyword matches (lexical matches) should never be filtered out by threshold
+            if point.id not in sparse_ids and capped_score < THRESHOLD:
                 continue
 
             transcript = point.payload.get("transcript", "")
@@ -660,6 +668,9 @@ def chat_with_video(request: ChatRequest):
             
             batch_res = [visual_res, audio_res, sparse_res]
             
+            # Keep track of points returned by the sparse lexical search
+            sparse_ids = {r.id for r in sparse_res}
+            
             merged = {}
             for res_list in batch_res:
                 for r in res_list:
@@ -677,7 +688,8 @@ def chat_with_video(request: ChatRequest):
             
             for r in final_points:
                 score = min(r.score, 1.0)  # Cap score to 1.0 for consistency
-                if score < 0.3:
+                # Exact keyword matches (lexical matches) should never be filtered out by threshold
+                if r.id not in sparse_ids and score < 0.3:
                     continue # Skip low relevance chunks
                     
                 chunk_text = r.payload.get("transcript", "")
@@ -998,3 +1010,107 @@ def compute_graph_communities(request: ComputeGraphRequest, bg_tasks: Background
         
     bg_tasks.add_task(graph_service.compute_communities, request.folder_name, target_ids)
     return {"success": True, "message": f"GraphRAG Community Detection started for {request.folder_name}."}
+
+@router.get("/api/debug_db")
+def debug_db():
+    try:
+        q_client = get_qdrant_client()
+        collections = q_client.get_collections()
+        col_names = [c.name for c in collections.collections]
+        
+        info = {}
+        for col in col_names:
+            count_res = q_client.count(collection_name=col)
+            records, _ = q_client.scroll(collection_name=col, limit=10, with_payload=True, with_vectors=False)
+            info[col] = {
+                "count": count_res.count,
+                "samples": [
+                    {
+                        "id": r.id,
+                        "video_id": r.payload.get("video_id"),
+                        "start": r.payload.get("start_timestamp"),
+                        "end": r.payload.get("end_timestamp"),
+                        "transcript": r.payload.get("transcript")
+                    }
+                    for r in records
+                ]
+            }
+        return {"collections": info}
+    except Exception as e:
+        return {"error": str(e)}
+
+@router.get("/api/debug_search")
+def debug_search(query: str):
+    try:
+        _ensure_models_loaded()
+        
+        clip_model = get_clip_model()
+        clip_tokenizer = get_clip_tokenizer()
+        bm25_model = get_bm25_model()
+        dense_text_model = get_dense_text_model()
+        device = get_device()
+        qdrant_client = get_qdrant_client()
+        
+        # 1. Optimize query
+        optimized = llm_service.optimize_query(query, llm_settings.provider, llm_settings.model)
+        if "|" in optimized:
+            parts = optimized.split("|")
+            query_original = parts[0].strip()
+            query_english = parts[1].strip()
+        else:
+            query_original = optimized.strip()
+            query_english = optimized.strip()
+            
+        # 2. Dense CLIP
+        with torch.no_grad():
+            text_input = clip_tokenizer([query_english]).to(device)
+            dense_tensor = clip_model.encode_text(text_input)
+            dense_tensor /= dense_tensor.norm(dim=-1, keepdim=True)
+            dense_vector = dense_tensor.tolist()[0]
+            
+        # 3. Sparse BM25
+        sparse_result = list(bm25_model.embed([query_original]))[0]
+        sparse_vector = models.SparseVector(
+            indices=sparse_result.indices.tolist(),
+            values=sparse_result.values.tolist()
+        )
+        
+        # 4. CLAP Audio Text
+        audio_dense_vector = get_clap_text_vector(query_original)
+        
+        # 5. Queries
+        visual_res = qdrant_client.query_points(collection_name="video_segments", query=dense_vector, using="visual", limit=5, with_payload=True).points
+        audio_res = qdrant_client.query_points(collection_name="video_segments", query=audio_dense_vector, using="audio", limit=5, with_payload=True).points
+        sparse_res = qdrant_client.query_points(collection_name="video_segments", query=sparse_vector, using="text_sparse", limit=5, with_payload=True).points
+        
+        return {
+            "query": query,
+            "optimized": {
+                "raw": optimized,
+                "original": query_original,
+                "english": query_english
+            },
+            "sparse_vector": {
+                "indices": sparse_vector.indices,
+                "values": sparse_vector.values
+            },
+            "raw_results": {
+                "visual": [
+                    {"id": r.id, "score": r.score, "video_id": r.payload.get("video_id"), "transcript": r.payload.get("transcript")}
+                    for r in visual_res
+                ],
+                "audio": [
+                    {"id": r.id, "score": r.score, "video_id": r.payload.get("video_id"), "transcript": r.payload.get("transcript")}
+                    for r in audio_res
+                ],
+                "sparse": [
+                    {"id": r.id, "score": r.score, "video_id": r.payload.get("video_id"), "transcript": r.payload.get("transcript")}
+                    for r in sparse_res
+                ]
+            }
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+

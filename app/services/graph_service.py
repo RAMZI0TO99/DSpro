@@ -6,50 +6,38 @@ import threading
 from app.core.config import llm_settings
 from app.services.llm_service import llm_service
 
-# Initialize Kuzu Database
-db_dir = os.getenv("GRAPH_DB_PATH", "./graph_db")
-os.makedirs(db_dir, exist_ok=True)
-db_path = os.path.join(db_dir, "knowledge_graph.db")
-db = kuzu.Database(db_path)
-conn = kuzu.Connection(db)
+class LazyKuzuConnection:
+    def __init__(self):
+        self._conn = None
+        self._db = None
+        self._lock = threading.Lock()
 
-def init_schema():
-    """Initializes the Kuzu database schema."""
-    try:
-        conn.execute("CREATE NODE TABLE Entity (id STRING, type STRING, name STRING, PRIMARY KEY (id))")
-    except RuntimeError:
-        pass
-    
-    try:
-        conn.execute("CREATE NODE TABLE VideoChunk (id STRING, video_id STRING, start_timestamp DOUBLE, end_timestamp DOUBLE, text STRING, PRIMARY KEY (id))")
-    except RuntimeError:
-        pass
-        
-    try:
-        conn.execute("CREATE REL TABLE RELATES_TO (FROM Entity TO Entity, relationship STRING)")
-    except RuntimeError:
-        pass
+    def __getattr__(self, name):
+        with self._lock:
+            if self._conn is None:
+                db_dir = os.getenv("GRAPH_DB_PATH", "./graph_db")
+                os.makedirs(db_dir, exist_ok=True)
+                db_path = os.path.join(db_dir, "knowledge_graph_v3.db")
+                self._db = kuzu.Database(db_path)
+                self._conn = kuzu.Connection(self._db)
+                self._init_schema()
+        return getattr(self._conn, name)
 
-    try:
-        conn.execute("CREATE REL TABLE APPEARS_IN (FROM Entity TO VideoChunk)")
-    except RuntimeError:
-        pass
-
-    try:
-        conn.execute("CREATE NODE TABLE Community (id STRING, title STRING, summary STRING, folder STRING, PRIMARY KEY (id))")
-    except RuntimeError:
+    def _init_schema(self):
+        def _try(q):
+            try: self._conn.execute(q)
+            except RuntimeError: pass
+        _try("CREATE NODE TABLE Entity (id STRING, type STRING, name STRING, PRIMARY KEY (id))")
+        _try("CREATE NODE TABLE VideoChunk (id STRING, video_id STRING, start_timestamp DOUBLE, end_timestamp DOUBLE, text STRING, PRIMARY KEY (id))")
+        _try("CREATE REL TABLE RELATES_TO (FROM Entity TO Entity, relationship STRING)")
+        _try("CREATE REL TABLE APPEARS_IN (FROM Entity TO VideoChunk)")
+        _try("CREATE NODE TABLE Community (id STRING, title STRING, summary STRING, folder STRING, PRIMARY KEY (id))")
         try:
-            # Try to alter the table to add the folder column if it exists without it
-            conn.execute("ALTER TABLE Community ADD folder STRING DEFAULT 'Uncategorized'")
-        except RuntimeError:
-            pass
+            self._conn.execute("ALTER TABLE Community ADD folder STRING DEFAULT 'Uncategorized'")
+        except RuntimeError: pass
+        _try("CREATE REL TABLE IN_COMMUNITY (FROM Entity TO Community)")
 
-    try:
-        conn.execute("CREATE REL TABLE IN_COMMUNITY (FROM Entity TO Community)")
-    except RuntimeError:
-        pass
-
-init_schema()
+conn = LazyKuzuConnection()
 
 class GraphService:
     def __init__(self):
