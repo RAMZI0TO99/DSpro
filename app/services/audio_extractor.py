@@ -14,9 +14,22 @@ class AcousticExtractor:
     def _load_model(self):
         if self.model is None:
             from transformers import ClapModel, ClapProcessor
-            print("[ACOUSTIC WORKER] Lazy-loading LAION-CLAP (HTSAT-Unfused) model into VRAM...")
-            self.model = ClapModel.from_pretrained("laion/clap-htsat-unfused").to(self.device).eval()
-            self.processor = ClapProcessor.from_pretrained("laion/clap-htsat-unfused")
+            
+            # Check local models/clip directory first (which user confirmed contains the CLAP model)
+            local_path = os.path.abspath("./models/clip")
+            if not (os.path.isdir(local_path) and os.path.exists(os.path.join(local_path, "config.json"))):
+                local_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../models/clip"))
+                
+            if os.path.isdir(local_path) and os.path.exists(os.path.join(local_path, "config.json")):
+                model_source = local_path
+                print(f"[ACOUSTIC WORKER] Lazy-loading LAION-CLAP (HTSAT-Unfused) model from local directory: {local_path}...")
+            else:
+                model_source = "laion/clap-htsat-unfused"
+                print(f"[ACOUSTIC WORKER] Lazy-loading LAION-CLAP (HTSAT-Unfused) model from Hugging Face Hub: {model_source}...")
+                
+            self.model = ClapModel.from_pretrained(model_source).to(self.device).eval()
+            self.processor = ClapProcessor.from_pretrained(model_source)
+
 
     def load_audio_file(self, file_path: str):
         """Loads and caches the 48kHz audio track for the active file to optimize sequential chunk slicing."""
@@ -44,7 +57,10 @@ class AcousticExtractor:
             if len(chunk) == 0:
                 return [0.0] * 512
 
-            inputs = self.processor(audios=chunk, sampling_rate=48000, return_tensors="pt").to(self.device)
+            try:
+                inputs = self.processor(audio=chunk, sampling_rate=48000, return_tensors="pt").to(self.device)
+            except TypeError:
+                inputs = self.processor(audios=chunk, sampling_rate=48000, return_tensors="pt").to(self.device)
             with torch.no_grad():
                 embed = self.model.get_audio_features(**inputs)
                 embed /= embed.norm(dim=-1, keepdim=True)
