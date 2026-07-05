@@ -519,6 +519,7 @@ def search_video(request: SearchRequest):
             snippet = (transcript[:500] + "...") if len(transcript) > 500 else transcript
 
             output.append({
+                "chunk_id": str(point.id),
                 "video_id": point.payload.get("video_id"),
                 "start_timestamp": point.payload.get("start_timestamp"),
                 "end_timestamp": point.payload.get("end_timestamp"),

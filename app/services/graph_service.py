@@ -248,7 +248,7 @@ class GraphService:
                 if not edges_text:
                     continue
 
-                sys_prompt = "You are a Knowledge Graph Community Summarizer. Provide a very short title (max 5 words) and a concise 2-sentence summary of what this cluster of entities represents. Return ONLY JSON in this format: {\"title\": \"Title\", \"summary\": \"Summary\"}"
+                sys_prompt = "You are a Knowledge Graph Community Summarizer. Provide a very short title (max 5 words) and a concise 2-sentence summary of what this cluster of entities represents. Return ONLY JSON in this format: {\"title\": \"Title\", \"summary\": \"Summary\"}. CRITICAL: DO NOT include trailing commas in your JSON."
                 user_prompt = "Edges:\n" + "\n".join(edges_text)
 
                 try:
@@ -284,7 +284,10 @@ class GraphService:
                                 raise api_e
 
                     # Clean markdown
+                    import re
                     result_text = result_text.replace("```json", "").replace("```", "").strip()
+                    result_text = re.sub(r',\s*}', '}', result_text)
+                    result_text = re.sub(r',\s*]', ']', result_text)
                     data = json.loads(result_text)
                     
                     title = str(data.get("title", f"Community {comm_id}")).replace('"', "'")

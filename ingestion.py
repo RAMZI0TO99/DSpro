@@ -120,7 +120,7 @@ class LocalHotIngestionPipeline:
         """Yields SSE progress strings while ingesting media end-to-end."""
         ext = file_path.lower().split('.')[-1]
         
-        yield f"data: [0/4] Checking database for '{media_id}'...\n\n"
+        yield f"data: [0/5] Checking database for '{media_id}'...\n\n"
 
         if self.is_video_indexed(media_id):
             yield f"data: [COMPLETE] '{media_id}' is already indexed. Skipping ingestion!\n\n"
@@ -332,7 +332,7 @@ class LocalHotIngestionPipeline:
     def _process_video(self, video_path: str, video_id: str):
 
         # --- IDEMPOTENCY CHECK ---
-        yield f"data: [0/4] Checking database for '{video_id}'...\n\n"
+        yield f"data: [0/5] Checking database for '{video_id}'...\n\n"
 
         if self.is_video_indexed(video_id):
             yield f"data: [COMPLETE] '{video_id}' is already indexed. Skipping ingestion!\n\n"

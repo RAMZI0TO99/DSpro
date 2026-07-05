@@ -35,5 +35,19 @@
         "query": "Show me something happening somewhere at some time",
         "expected_chunk_ids": [],
         "is_adversarial": true
+    },
+    {
+        "query_id": "RAG_Q006",
+        "query": "What happened immediately after the user typed import sys and sys.exit?",
+        "expected_chunk_ids": ["sample_video"],
+        "expected_answer_claims": ["The user typed sys.exit() on the screen."],
+        "is_relational": true
+    },
+    {
+        "query_id": "RAG_Q007",
+        "query": "What was displayed on screen regarding subscribe during the first 120 seconds of footage?",
+        "expected_chunk_ids": ["sample_video"],
+        "expected_answer_claims": ["A python script was shown being edited."],
+        "is_relational": true
     }
 ]
