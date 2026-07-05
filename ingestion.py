@@ -136,13 +136,13 @@ class LocalHotIngestionPipeline:
             yield from self._process_video(file_path, media_id)
 
     def _process_image(self, file_path: str, media_id: str):
-        yield f"data: [1/4] Extracting text from image '{media_id}' using EasyOCR...\n\n"
+        yield f"data: [1/5] Extracting text from image '{media_id}' using EasyOCR...\n\n"
         # 1. OCR
         gray = cv2.imread(file_path, cv2.IMREAD_GRAYSCALE)
         text_elements = self._get_ocr_reader().readtext(gray, detail=0) if gray is not None else []
         transcript = " ".join(list(set(text_elements))).strip()
 
-        yield f"data: [2/4] Generating visual embeddings...\n\n"
+        yield f"data: [2/5] Generating visual embeddings...\n\n"
         # 2. Visual Vector
         pil_image = Image.open(file_path).convert("RGB")
         img_in = self.clip_transform(pil_image).unsqueeze(0).to(self.device)
@@ -150,7 +150,7 @@ class LocalHotIngestionPipeline:
             feat = self.clip_model.encode_image(img_in)
             vis_vec = (feat / feat.norm(dim=-1, keepdim=True)).cpu().tolist()[0]
 
-        yield f"data: [3/4] Generating semantic & lexical embeddings...\n\n"
+        yield f"data: [3/5] Generating semantic & lexical embeddings...\n\n"
         # 3. Audio/Text Semantic + Lexical
         aud_vec = [0.0] * 512
         if transcript:
@@ -162,7 +162,7 @@ class LocalHotIngestionPipeline:
         else:
             sparse_vec = models.SparseVector(indices=[], values=[])
 
-        yield f"data: [4/4] Upserting image point to Qdrant...\n\n"
+        yield f"data: [4/5] Upserting image point to Qdrant...\n\n"
         # 4. Upsert
         point = models.PointStruct(
             id=hash(f"{media_id}_0.0") & 0xFFFFFFFFFFFFFFFF,
@@ -182,13 +182,13 @@ class LocalHotIngestionPipeline:
         yield f"data: [COMPLETE] Image '{media_id}' successfully ingested!\n\n"
 
     def _process_audio(self, file_path: str, media_id: str):
-        yield f"data: [1/4] Transcribing audio for '{media_id}'...\n\n"
+        yield f"data: [1/5] Transcribing audio for '{media_id}'...\n\n"
         # 1. Transcribe
         audio, _ = librosa.load(file_path, sr=16000)
         result = self._get_audio_model().transcribe(audio, batch_size=4)
         detected_lang = result.get("language", "en")
         
-        yield f"data: [2/4] Detected language: '{detected_lang}'. Aligning...\n\n"
+        yield f"data: [2/5] Detected language: '{detected_lang}'. Aligning...\n\n"
         # 2. Align
         align_model, align_metadata = self._get_align_model(detected_lang)
         aligned_result = whisperx.align(
@@ -205,7 +205,7 @@ class LocalHotIngestionPipeline:
         self.acoustic_extractor.load_audio_file(file_path)
 
         # 3. Chunking & Vectors
-        yield f"data: [3/4] Chunking audio and generating vectors...\n\n"
+        yield f"data: [3/5] Chunking audio and generating vectors...\n\n"
         points_to_upsert = []
         
         for segment in audio_segments:
@@ -236,7 +236,7 @@ class LocalHotIngestionPipeline:
                 )
             )
 
-        yield f"data: [4/4] Upserting {len(points_to_upsert)} chunks to Qdrant...\n\n"
+        yield f"data: [4/5] Upserting {len(points_to_upsert)} chunks to Qdrant...\n\n"
         if points_to_upsert:
             # Batch upsert in chunks of 50
             for i in range(0, len(points_to_upsert), 50):
@@ -251,11 +251,11 @@ class LocalHotIngestionPipeline:
         yield f"data: [COMPLETE] Audio '{media_id}' successfully ingested!\n\n"
 
     def _process_pdf(self, file_path: str, media_id: str):
-        yield f"data: [1/4] Opening PDF document '{media_id}'...\n\n"
+        yield f"data: [1/5] Opening PDF document '{media_id}'...\n\n"
         doc = fitz.open(file_path)
         total_pages = len(doc)
         
-        yield f"data: [2/4] Processing {total_pages} pages (Extracting Text & Visuals)...\n\n"
+        yield f"data: [2/5] Processing {total_pages} pages (Extracting Text & Visuals)...\n\n"
         points_to_upsert = []
         
         for page_num in range(total_pages):
@@ -312,11 +312,11 @@ class LocalHotIngestionPipeline:
                 )
             )
 
-        yield f"data: [3/4] Document processed. Cleaning up...\n\n"
+        yield f"data: [3/5] Document processed. Cleaning up...\n\n"
         torch.cuda.empty_cache()
         gc.collect()
 
-        yield f"data: [4/4] Upserting {len(points_to_upsert)} pages to Qdrant...\n\n"
+        yield f"data: [4/5] Upserting {len(points_to_upsert)} pages to Qdrant...\n\n"
         if points_to_upsert:
             for i in range(0, len(points_to_upsert), 50):
                 self.db_client.upsert(collection_name="video_segments", points=points_to_upsert[i:i+50])
@@ -341,14 +341,14 @@ class LocalHotIngestionPipeline:
         # ----------------------------------------------------------------
         # PHASE 1: AUDIO TRANSCRIPTION (with auto language detection)
         # ----------------------------------------------------------------
-        yield f"data: [1/4] Transcribing audio for '{video_id}'...\n\n"
+        yield f"data: [1/5] Transcribing audio for '{video_id}'...\n\n"
 
         audio, _ = librosa.load(video_path, sr=16000)
         result = self._get_audio_model().transcribe(audio, batch_size=4)
 
         # FIX 2: Use the detected language for alignment instead of hardcoded 'en'
         detected_lang = result.get("language", "en")
-        yield f"data: [1/4] Detected language: '{detected_lang}'. Aligning...\n\n"
+        yield f"data: [1/5] Detected language: '{detected_lang}'. Aligning...\n\n"
 
         align_model, align_metadata = self._get_align_model(detected_lang)
         aligned_result = whisperx.align(
@@ -367,7 +367,7 @@ class LocalHotIngestionPipeline:
         # ----------------------------------------------------------------
         # PHASE 2: SCENE DETECTION (max 10s chunks)
         # ----------------------------------------------------------------
-        yield "data: [2/4] Detecting scene boundaries (10s chunks)...\n\n"
+        yield "data: [2/5] Detecting scene boundaries (10s chunks)...\n\n"
 
         scene_list = detect(video_path, ContentDetector(threshold=27.0))
         raw_boundaries = [{"start": s[0].get_seconds(), "end": s[1].get_seconds()} for s in scene_list]
@@ -395,12 +395,12 @@ class LocalHotIngestionPipeline:
             else:
                 scene_segments.append(scene)
 
-        yield f"data: [2/4] Found {len(scene_segments)} scene chunks.\n\n"
+        yield f"data: [2/5] Found {len(scene_segments)} scene chunks.\n\n"
 
         # ----------------------------------------------------------------
         # PHASE 3: VISUAL OCR (every ~5 seconds per scene)
         # ----------------------------------------------------------------
-        yield "data: [3/4] Running visual OCR scan...\n\n"
+        yield "data: [3/5] Running visual OCR scan...\n\n"
 
         scene_ocr_data = {}
         cap = cv2.VideoCapture(video_path)
@@ -425,7 +425,7 @@ class LocalHotIngestionPipeline:
                 
                 # Yield progress so the backend can check for cancellation between chunks!
                 if (idx + 1) % 5 == 0 or (idx + 1) == len(scene_segments):
-                    yield f"data: [3/4] OCR processed {idx + 1}/{len(scene_segments)} chunks...\n\n"
+                    yield f"data: [3/5] OCR processed {idx + 1}/{len(scene_segments)} chunks...\n\n"
         finally:
             cap.release()
 
@@ -435,7 +435,7 @@ class LocalHotIngestionPipeline:
         # ----------------------------------------------------------------
         # PHASE 4: VECTOR GENERATION & DB UPSERT
         # ----------------------------------------------------------------
-        yield f"data: [4/4] Generating vectors for {len(scene_segments)} chunks...\n\n"
+        yield f"data: [4/5] Generating vectors for {len(scene_segments)} chunks...\n\n"
 
         points_to_upsert = []
         cap = cv2.VideoCapture(video_path)
@@ -492,7 +492,7 @@ class LocalHotIngestionPipeline:
 
                 # Yield granular progress every 5 chunks
                 if (idx + 1) % 5 == 0 or (idx + 1) == len(scene_segments):
-                    yield f"data: [4/4] Vectorized {idx + 1}/{len(scene_segments)} chunks...\n\n"
+                    yield f"data: [4/5] Vectorized {idx + 1}/{len(scene_segments)} chunks...\n\n"
         finally:
             cap.release()
 

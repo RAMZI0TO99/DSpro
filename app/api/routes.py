@@ -761,6 +761,7 @@ def chat_with_video(request: ChatRequest):
 Based ONLY on the provided extracted data AND the Knowledge Graph Context, answer the user's question. 
 If the user asks a general question about the folder (like how many files there are), use the file list provided above.
 Keep your response conversational, concise, and direct. Do NOT provide a long detailed breakdown of the entire file unless the user explicitly asks for a summary.
+If the provided context is empty or does not contain relevant information to answer the query, you MUST explicitly refuse to answer and state that it is not present in the video data. Do NOT guess or fabricate information.
 
 Knowledge Graph Context:
 {graph_context}
