@@ -97,8 +97,18 @@ class GraphService:
                     break # Success
                 except Exception as api_e:
                     if attempt < max_retries - 1:
-                        print(f"API Error (Extracting Entities): {api_e}. Retrying in 2 seconds...")
-                        time.sleep(2)
+                        import re
+                        error_str = str(api_e)
+                        sleep_time = 2
+                        
+                        match = re.search(r'retry in (\d+\.?\d*)s', error_str, re.IGNORECASE)
+                        if match:
+                            sleep_time = min(float(match.group(1)) + 1, 65)
+                        elif "429" in error_str or "quota" in error_str.lower():
+                            sleep_time = 15 * (attempt + 1)
+                            
+                        print(f"API Error (Extracting Entities): {error_str}. Retrying in {sleep_time:.1f} seconds...")
+                        time.sleep(sleep_time)
                     else:
                         raise api_e
 
@@ -278,8 +288,18 @@ class GraphService:
                             break # Success
                         except Exception as api_e:
                             if attempt < max_retries - 1:
-                                print(f"API Error (Community {comm_id}): {api_e}. Retrying in 2 seconds...")
-                                time.sleep(2)
+                                import re
+                                error_str = str(api_e)
+                                sleep_time = 2
+                                
+                                match = re.search(r'retry in (\d+\.?\d*)s', error_str, re.IGNORECASE)
+                                if match:
+                                    sleep_time = min(float(match.group(1)) + 1, 65)
+                                elif "429" in error_str or "quota" in error_str.lower():
+                                    sleep_time = 15 * (attempt + 1)
+                                    
+                                print(f"API Error (Community {comm_id}): {error_str}. Retrying in {sleep_time:.1f} seconds...")
+                                time.sleep(sleep_time)
                             else:
                                 raise api_e
 

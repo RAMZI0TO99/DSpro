@@ -11,8 +11,10 @@ let chatContextMode = "video";
 let conversationHistory = [];
 let pendingDeleteId = null;
 let pendingMoveId = null;
+let pendingCreateFolder = false;
 let currentAbortController = null;
 let activeIngestVideoId = null;
+let allFolders = [];
 
 // ============================================================
 // DOM REFS
@@ -33,6 +35,7 @@ const ingestFilename = document.getElementById('ingest-filename');
 const cancelIngestBtn = document.getElementById('cancel-ingest-btn');
 const topkSlider = document.getElementById('topk-slider');
 const topkValue = document.getElementById('topk-value');
+const graphFolderSelect = document.getElementById('graph-folder-select');
 
 // Settings Refs
 const settingsBtn = document.getElementById('settings-btn');
@@ -123,6 +126,21 @@ function removeElement(el) { el && el.remove(); }
 // ============================================================
 // LIBRARY — Boot & Render
 // ============================================================
+
+function createNewFolder() {
+    pendingDeleteId = null;
+    pendingMoveId = null;
+    pendingCreateFolder = true;
+    modalTitle.textContent = "📁 Create Folder";
+    modalMessage.textContent = "Enter a name for the new folder:";
+    modalFolderSelect.style.display = "none";
+    modalInput.style.display = "block";
+    modalInput.value = "";
+    modalConfirm.textContent = "Create";
+    modalOverlay.classList.add('open');
+    setTimeout(() => modalInput.focus(), 100);
+}
+
 async function bootSystem() {
     try {
         const res = await fetch('/library');
@@ -132,6 +150,7 @@ async function bootSystem() {
         titleLibrary = data.titleLibrary || {};
         sizeLibrary = data.sizeLibrary || {};
         folderLibrary = data.folderLibrary || {};
+        allFolders = data.allFolders || [];
 
         renderLibrary();
 
@@ -165,6 +184,10 @@ function renderLibrary() {
     libraryEmpty.style.display = ids.length === 0 ? 'flex' : 'none';
 
     const folders = {};
+    allFolders.forEach(f => {
+        folders[f] = [];
+    });
+
     ids.forEach(id => {
         let folder = folderLibrary[id] || "Uncategorized";
         if (folder === "." || folder === "") folder = "Uncategorized";
@@ -270,7 +293,7 @@ function renderLibrary() {
         folderHeader.addEventListener('click', () => {
             activeFolderId = folderName;
             folderContent.style.display = folderContent.style.display === 'none' ? 'block' : 'none';
-            
+
             // If the graph is currently being viewed, update it to show this folder
             if (document.getElementById('tab-graph').classList.contains('active')) {
                 loadGraph();
@@ -303,6 +326,31 @@ function renderLibrary() {
         folderDiv.appendChild(folderContent);
         videoList.insertBefore(folderDiv, libraryEmpty);
     });
+
+    if (graphFolderSelect) {
+        const currentVal = graphFolderSelect.value;
+        graphFolderSelect.innerHTML = '<option value="All Media">All Media</option>';
+        allFolders.sort().forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = f;
+            opt.textContent = f;
+            graphFolderSelect.appendChild(opt);
+        });
+
+        if (activeFolderId && activeFolderId !== "Uncategorized" && allFolders.includes(activeFolderId)) {
+            graphFolderSelect.value = activeFolderId;
+        } else if (currentVal && currentVal !== "All Media" && allFolders.includes(currentVal)) {
+            graphFolderSelect.value = currentVal;
+        } else {
+            graphFolderSelect.value = "All Media";
+        }
+
+        if (typeof graphView !== 'undefined' && graphView && graphView.style.display === 'block') {
+            if (typeof loadGraph === 'function') {
+                loadGraph();
+            }
+        }
+    }
 }
 
 function updateChatContextUI() {
@@ -406,6 +454,10 @@ function setActiveVideo(id) {
         videoPlayer.src = mediaUrl;
         videoPlayer.load();
         videoPlayer.play().catch(e => console.log("Autoplay blocked by browser:", e));
+    }
+
+    if (tabPlayer) {
+        tabPlayer.click();
     }
 
     updateChatContextUI();
@@ -987,6 +1039,7 @@ function closeModal() {
     modalOverlay.classList.remove('open');
     pendingDeleteId = null;
     pendingMoveId = null;
+    pendingCreateFolder = false;
     modalInput.value = "";
     modalInput.style.display = "none";
     modalFolderSelect.style.display = "none";
@@ -1041,6 +1094,24 @@ modalConfirm.addEventListener('click', async () => {
         }
         closeModal();
         await moveVideoToFolder(idToMove, newFolder);
+    } else if (pendingCreateFolder) {
+        // CREATE FOLDER LOGIC
+        const folderName = modalInput.value.trim();
+        closeModal();
+        if (folderName) {
+            try {
+                const res = await fetch('/folder/' + encodeURIComponent(folderName), { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    bootSystem(); // Reload library
+                } else {
+                    alert("Failed to create folder: " + data.error);
+                }
+            } catch (e) {
+                console.error("Error creating folder", e);
+                alert("Error creating folder.");
+            }
+        }
     }
 });
 
@@ -1218,35 +1289,49 @@ if (tabPlayer && tabGraph) {
         mainPdfEl.style.display = 'none';
         graphView.style.display = 'block';
 
-        if (!network) {
-            loadGraph();
+        // Populate dropdown
+        const currentVal = graphFolderSelect.value;
+        graphFolderSelect.innerHTML = '<option value="All Media">All Media</option>';
+        allFolders.sort().forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = f;
+            opt.textContent = f;
+            graphFolderSelect.appendChild(opt);
+        });
+
+        // Default to activeFolderId if it exists, otherwise keep current
+        if (activeFolderId && activeFolderId !== "Uncategorized" && allFolders.includes(activeFolderId)) {
+            graphFolderSelect.value = activeFolderId;
+        } else if (currentVal && currentVal !== "All Media" && allFolders.includes(currentVal)) {
+            graphFolderSelect.value = currentVal;
+        } else {
+            graphFolderSelect.value = "All Media";
         }
+
+        loadGraph();
     });
-}
 
-if (refreshGraphBtn) {
+    graphFolderSelect.addEventListener('change', loadGraph);
+
     refreshGraphBtn.addEventListener('click', loadGraph);
-}
 
-const computeBtn = document.getElementById('compute-communities-btn');
-if (computeBtn) {
+    const computeBtn = document.getElementById('compute-communities-btn');
     computeBtn.addEventListener('click', async () => {
-        if (!confirm("This will recompute GraphRAG communities using the LLM. It may take a minute. Continue?")) return;
-        computeBtn.innerText = 'Building...';
+        const folderToCompute = graphFolderSelect.value === "All Media" ? "Uncategorized" : graphFolderSelect.value;
         computeBtn.disabled = true;
+        computeBtn.textContent = "Computing...";
         try {
-            const currentFolder = (activeFolderId && activeFolderId !== "All Media") ? activeFolderId : "Uncategorized";
             await fetch('/graph/compute_communities', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ folder_name: currentFolder })
+                body: JSON.stringify({ folder_name: folderToCompute })
             });
-            addMessage('ai', `✅ Started GraphRAG Community Detection in the background for folder: ${currentFolder}. Global summaries will be updated soon.`);
+            alert(`Community detection started for ${folderToCompute}.`);
         } catch (e) {
-            console.error(e);
+            alert('Failed to trigger graph compute');
         }
         setTimeout(() => {
-            computeBtn.innerText = 'Build GraphRAG';
+            computeBtn.textContent = "Build GraphRAG";
             computeBtn.disabled = false;
         }, 3000);
     });
@@ -1257,15 +1342,19 @@ async function loadGraph() {
         const container = document.getElementById('graph-network');
         container.innerHTML = '<div style="display:flex; justify-content:center; align-items:center; height:100%; color:var(--text-secondary);">Loading Graph...</div>';
 
+        const selectedFolder = graphFolderSelect.value;
         let queryParams = "";
-        if (activeFolderId && activeFolderId !== "All Media") {
+        if (selectedFolder && selectedFolder !== "All Media") {
             const targetIds = Object.keys(folderLibrary).filter(id => {
                 let f = folderLibrary[id] || "Uncategorized";
                 if (f === "." || f === "") f = "Uncategorized";
-                return f === activeFolderId;
+                return f === selectedFolder;
             });
             if (targetIds.length > 0) {
                 queryParams = `?target_video_ids=${targetIds.join(',')}`;
+            } else {
+                container.innerHTML = `<div style="display:flex; justify-content:center; align-items:center; height:100%; color:var(--text-secondary);">No Graph Data Available for ${selectedFolder}.</div>`;
+                return;
             }
         }
 
@@ -1273,7 +1362,7 @@ async function loadGraph() {
         const data = await res.json();
 
         if (!data.nodes || data.nodes.length === 0) {
-            container.innerHTML = `<div style="display:flex; justify-content:center; align-items:center; height:100%; color:var(--text-secondary);">No Graph Data Available for ${activeFolderId || 'All Media'}.</div>`;
+            container.innerHTML = `<div style="display:flex; justify-content:center; align-items:center; height:100%; color:var(--text-secondary);">No Graph Data Available for ${selectedFolder || 'All Media'}.</div>`;
             return;
         }
 
@@ -1308,11 +1397,11 @@ async function loadGraph() {
             },
             physics: {
                 solver: 'forceAtlas2Based',
-                forceAtlas2Based: { 
-                    gravitationalConstant: -50, 
-                    centralGravity: 0.01, 
-                    springLength: 200, 
-                    springConstant: 0.08 
+                forceAtlas2Based: {
+                    gravitationalConstant: -50,
+                    centralGravity: 0.01,
+                    springLength: 200,
+                    springConstant: 0.08
                 },
                 maxVelocity: 50,
                 timestep: 0.35,
@@ -1333,6 +1422,28 @@ async function loadGraph() {
         // Turn off physics after the initial layout settles so nodes stay exactly where they are
         network.on("stabilizationIterationsDone", function () {
             network.setOptions({ physics: false });
+        });
+
+        // Double-click to select node + ALL connected nodes recursively for group dragging
+        network.on("doubleClick", function (params) {
+            if (params.nodes.length > 0) {
+                const startNode = params.nodes[0];
+                const visited = new Set([startNode]);
+                const queue = [startNode];
+
+                while (queue.length > 0) {
+                    const current = queue.shift();
+                    const neighbors = network.getConnectedNodes(current);
+                    for (const neighbor of neighbors) {
+                        if (!visited.has(neighbor)) {
+                            visited.add(neighbor);
+                            queue.push(neighbor);
+                        }
+                    }
+                }
+
+                network.selectNodes(Array.from(visited));
+            }
         });
 
 

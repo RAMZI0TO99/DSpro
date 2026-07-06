@@ -48,7 +48,15 @@
              LEFT — VIDEO LIBRARY SIDEBAR
         ============================================================ -->
             <aside id="library-pane">
-                <div class="pane-header">Video Library</div>
+                <div class="pane-header">
+                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                        <span>Video Library</span>
+                        <button id="new-folder-btn" onclick="createNewFolder()" title="New Folder"
+                            style="background:transparent; border:none; color:var(--text-primary); cursor:pointer; font-size:14px; padding: 0 4px;">
+                            ➕
+                        </button>
+                    </div>
+                </div>
 
                 <div id="video-list">
                     <div class="empty-state" id="library-empty">
@@ -67,7 +75,7 @@
                             + Files
                         </button>
                         <button class="upload-action-btn" onclick="document.getElementById('folder-upload').click()">
-                            + Folder
+                            + Upload Folder
                         </button>
                     </div>
                     <div id="ingest-progress-bar">
@@ -96,11 +104,14 @@
                 <div id="player-header">
                     <div style="display:flex; align-items:center; flex:1; overflow:hidden;">
                         <div id="now-playing-dot"></div>
-                        <div id="now-playing-title" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">No video selected</div>
+                        <div id="now-playing-title"
+                            style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">No video selected</div>
                     </div>
                     <div id="view-tabs" style="display:flex; margin-left:10px; gap:8px;">
-                        <button id="tab-player" style="background:var(--accent); color:white; border:none; padding:4px 12px; border-radius:12px; font-size:12px; cursor:pointer;">Player</button>
-                        <button id="tab-graph" style="background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); padding:4px 12px; border-radius:12px; font-size:12px; cursor:pointer;">Graph</button>
+                        <button id="tab-player"
+                            style="background:var(--accent); color:white; border:none; padding:4px 12px; border-radius:12px; font-size:12px; cursor:pointer;">Player</button>
+                        <button id="tab-graph"
+                            style="background:var(--bg-base); color:var(--text-primary); border:1px solid var(--border); padding:4px 12px; border-radius:12px; font-size:12px; cursor:pointer;">Graph</button>
                     </div>
                 </div>
 
@@ -113,11 +124,20 @@
                         alt="Selected Image">
                     <iframe id="main-pdf"
                         style="display:none; width:100%; height:100%; border:none; border-radius:var(--radius-lg);"></iframe>
-                    <div id="graph-view" style="display:none; width:100%; height:100%; border-radius:var(--radius-lg); background:var(--bg-base); position:relative;">
+                    <div id="graph-view"
+                        style="display:none; width:100%; height:100%; border-radius:var(--radius-lg); background:var(--bg-base); position:relative;">
                         <div id="graph-network" style="width:100%; height:100%;"></div>
                         <div style="position:absolute; top:10px; right:10px; z-index:10; display:flex; gap:8px;">
-                            <button id="compute-communities-btn" style="background:var(--accent); color:white; border:none; padding:4px 12px; border-radius:4px; font-size:12px; cursor:pointer;">Build GraphRAG</button>
-                            <button id="refresh-graph-btn" style="background:var(--bg-panel); color:var(--text-primary); border:1px solid var(--border); padding:4px 12px; border-radius:4px; font-size:12px; cursor:pointer;">Refresh Graph</button>
+                            <select id="graph-folder-select"
+                                style="background:var(--bg-panel); color:var(--text-primary); border:1px solid var(--border); padding:4px 8px; border-radius:4px; font-size:12px; outline:none;">
+                                <option value="All Media">All Media</option>
+                            </select>
+                            <button id="compute-communities-btn"
+                                style="background:var(--accent); color:white; border:none; padding:4px 12px; border-radius:4px; font-size:12px; cursor:pointer;">Build
+                                GraphRAG</button>
+                            <button id="refresh-graph-btn"
+                                style="background:var(--bg-panel); color:var(--text-primary); border:1px solid var(--border); padding:4px 12px; border-radius:4px; font-size:12px; cursor:pointer;">Refresh
+                                Graph</button>
                         </div>
                     </div>
                 </div>

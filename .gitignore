@@ -17,6 +17,7 @@ dist/
 venv/
 env/
 ENV/
+.pytest_cache/
 
 # --- ML / AI Models ---
 models/

@@ -413,7 +413,15 @@ def get_media_library():
     if not os.path.exists(media_dir):
         return {"videoLibrary": {}, "titleLibrary": {}, "sizeLibrary": {}, "folderLibrary": {}}
 
+    all_folders = set()
     for root, dirs, files in os.walk(media_dir):
+        rel_root = os.path.relpath(root, media_dir).replace('\\', '/')
+        if rel_root != '.':
+            all_folders.add(rel_root)
+        for d in dirs:
+            rel_dir = os.path.relpath(os.path.join(root, d), media_dir).replace('\\', '/')
+            all_folders.add(rel_dir)
+            
         for filename in files:
             ext = filename.lower().split('.')[-1]
             if ext in ["mp4", "mkv", "mp3", "wav", "m4a", "jpg", "jpeg", "png", "webp", "pdf"]:
@@ -434,7 +442,8 @@ def get_media_library():
         "videoLibrary": video_lib,
         "titleLibrary": title_lib,
         "sizeLibrary": size_lib,
-        "folderLibrary": folder_lib
+        "folderLibrary": folder_lib,
+        "allFolders": list(all_folders)
     }
 
 
@@ -856,6 +865,17 @@ def delete_video(video_id: str, delete_file: bool = Query(default=True)):
         "vectors_deleted": vectors_deleted,
         "file_deleted": file_deleted
     }
+
+@router.post("/folder/{folder_name}")
+def create_folder(folder_name: str):
+    import urllib.parse
+    folder_name = urllib.parse.unquote(folder_name)
+    folder_path = os.path.join("media", folder_name)
+    try:
+        os.makedirs(folder_path, exist_ok=True)
+        return {"success": True, "folder": folder_name}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 @router.delete("/folder/{folder_name}")
 def delete_folder(folder_name: str):
