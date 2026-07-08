@@ -43,6 +43,9 @@ services:
       # Model name as it appears in your LM Studio / Ollama model list
       - LLM_MODEL=Llama-3.2-3B-Instruct-Q4_K_M
 
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
     volumes:
       # Application media (user uploads)
       - media_data:/app/media

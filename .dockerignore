@@ -20,6 +20,7 @@ Docs/
 # --- App Data (Mounted dynamically via volumes) ---
 qdrant_db/
 media/
+graph_db/
 
 # --- Build Artifacts ---
 *.tar
