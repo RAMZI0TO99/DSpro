@@ -1,4 +1,4 @@
-name: Request validation
+name: Unit tests and Compose
 
 on:
   pull_request:
@@ -25,10 +25,10 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install request-test dependencies
+      - name: Install unit-test dependencies
         run: python -m pip install --disable-pip-version-check --no-cache-dir -r requirements-test.txt
-      - name: Test request validation
-        run: python -m pytest tests/test_search_request.py -q
+      - name: Test lightweight units
+        run: python -m pytest tests -q
       - name: Validate Compose configuration
         run: |
           cp .env.example .env

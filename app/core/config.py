@@ -1,5 +1,7 @@
 import os
 import json
+import tempfile
+from pathlib import Path
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -39,7 +41,23 @@ def load_settings() -> LLMSettings:
     )
 
 def save_settings(settings: LLMSettings):
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        f.write(settings.model_dump_json(indent=4))
+    payload = settings.model_dump_json(indent=4)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=os.path.dirname(os.path.abspath(SETTINGS_FILE)),
+            prefix=".settings-",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = temporary.name
+            temporary.write(payload)
+        os.replace(temporary_path, SETTINGS_FILE)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            Path(temporary_path).unlink(missing_ok=True)
 
 llm_settings = load_settings()

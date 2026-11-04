@@ -1,2 +1,3 @@
 pydantic>=2,<3
 pytest>=8,<10
+python-dotenv>=1,<2
