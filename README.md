@@ -142,11 +142,11 @@ This is an example request, not a recorded result. Search responses include medi
 - Speech alignment may fall back to English when a language-specific model cannot load; this can affect timestamps and transcript quality.
 - Dependencies, model caches, GPU compatibility, and the separately hosted LLM must be validated together. These setup instructions are derived from source inspection; they are not a claim that a clean build or full inference run has passed.
 
-The request-validation tests run without model assets or a running service. In an isolated environment, run:
+The request-validation and settings-persistence tests run without model assets or a running service. In an isolated environment, run:
 
 ```bash
 python -m pip install -r requirements-test.txt
-python -m pytest tests/test_search_request.py
+python -m pytest tests
 ```
 
-GitHub Actions runs these tests and validates the Compose configuration on Python 3.11 and 3.13 for pull requests and pushes to `main`. It does not build the inference image or start services.
+GitHub Actions runs these tests and validates the Compose configuration on Python 3.11 and 3.13 for pull requests and pushes to `main`. The settings tests cover successful saves, serialization and write failures, replacement failures, and Unicode round trips. The workflow does not build the inference image or start services.
