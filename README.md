@@ -121,6 +121,8 @@ For an API client, send this JSON body to `POST /search` after ingesting media:
 }
 ```
 
+`top_k` must be a non-negative integer and defaults to 5. Negative counts are rejected during request validation.
+
 This is an example request, not a recorded result. Search responses include media IDs, timestamps, transcript snippets, and retrieval scores. The response field is named `hybrid_rrf_score`, but the current implementation merges capped scores by maximum; it does not implement reciprocal rank fusion.
 
 ## Implementation evidence
@@ -135,7 +137,13 @@ This is an example request, not a recorded result. Search responses include medi
 
 ## Limitations and validation
 
-- Retrieval quality, latency, and answer accuracy have no published benchmark in this repository. There is no committed automated test suite or reference evaluation dataset.
+- Retrieval quality, latency, and answer accuracy have no published benchmark or reference evaluation dataset in this repository.
 - Context packing uses character limits rather than the selected model's exact tokenizer and context window. Answers and graph summaries still require checking against the original media.
 - Speech alignment may fall back to English when a language-specific model cannot load; this can affect timestamps and transcript quality.
 - Dependencies, model caches, GPU compatibility, and the separately hosted LLM must be validated together. These setup instructions are derived from source inspection; they are not a claim that a clean build or full inference run has passed.
+
+The request-validation tests run without model assets or a running service. Install Pydantic and pytest in an isolated environment, then run:
+
+```bash
+python -m pytest tests/test_search_request.py
+```
