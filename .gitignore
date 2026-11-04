@@ -1,6 +1,7 @@
 # --- Secrets & Config ---
 .env
 .env.*
+!.env.example
 settings.json
 credentials.json
 
