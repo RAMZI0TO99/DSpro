@@ -50,14 +50,14 @@ git clone https://github.com/RAMZI0TO99/DSpro.git
 cd DSpro
 ```
 
-Create an empty `.env` in the repository root; Compose requires the file even when no API key is used. There is no `.env.example` in the repository.
+Copy the supplied `.env.example` to `.env` in the repository root; Compose requires the file even when no API key is used. The template contains empty optional credential fields, so local LM Studio and Ollama need no keys.
 
 ```powershell
 # PowerShell; creates the file only if it does not already exist
-if (-not (Test-Path .env)) { New-Item -ItemType File .env }
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-On Linux/macOS, use `touch .env`.
+On Linux/macOS, use `[ -f .env ] || cp .env.example .env` to preserve an existing configuration.
 
 ### 2. Supply the model assets
 
